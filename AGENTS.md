@@ -118,3 +118,34 @@ If a task cannot be completed because context is missing or ambiguous:
 1. Do not guess or hallucinate structure
 2. Emit a `CONTEXT_GAP` signal with the specific missing information identified
 3. Suggest what context file should be updated to resolve the gap
+
+---
+
+## README convention (mandatory for all packages and subdirectories)
+
+Every package and every subdirectory within `packages/` must have a `README.md`.
+This is not documentation for humans — it is the agent's orientation document for
+that scope. Agents should read the nearest `README.md` before acting on any file.
+
+### What every package README.md must contain
+
+- **What this package does** — one paragraph, no jargon
+- **Responsibilities** — bulleted list of what belongs here
+- **Must never** — explicit list of things this package must not do
+- **Key exports** — what other packages consume from here
+- **Structure** — directory tree with one-line descriptions
+- **Agent orientation** — numbered steps: what to read first, second, third
+
+### What every subdirectory README.md must contain
+
+- **What this directory contains** — one sentence
+- **Files** — table of filename → purpose
+- **Rules for agents working here** — constraints specific to this directory
+- **Context needed** — which files to read before working here
+
+### Rules
+
+- A missing README.md in any package or subdirectory is a `CONTEXT_GAP`
+- READMEs are updated by the context-agent when intent changes the package's scope
+- READMEs are checked for drift by the drift-agent on its daily schedule
+- Never delete a README.md — update it
