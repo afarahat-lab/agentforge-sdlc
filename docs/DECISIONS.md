@@ -202,3 +202,36 @@ intent spec's `outOfScope` field.
 **Rationale:** Stopping early is cheaper than retrying downstream. Human clarification
 at intent time costs seconds; discovering the wrong interpretation after code generation
 costs multiple agent cycles.
+
+---
+
+## ADR-012 — Quality gate: lint and security in parallel, constraints before tests
+
+**Date:** 2026-05
+**Status:** Accepted
+
+**Decision:** Lint and security run in parallel first. Constraint check runs after both complete. Test runner runs after constraint check. Review agent always runs last.
+
+**Rationale:** Fast cheap checks fail early. Architectural validity checked before tests — no value testing broken architecture. Tests are the most expensive operation and should only run on structurally sound code.
+
+---
+
+## ADR-013 — Gate verdict logic lives in review-agent only
+
+**Date:** 2026-05
+**Status:** Accepted
+
+**Decision:** Individual gate agents report signals without a verdict. Only the review-agent determines pass/fail/escalate. Gate logic is centralised in one function.
+
+**Rationale:** Distributed verdict logic creates inconsistency. One agent should own the gate decision so the logic is auditable, testable, and easy to change under one ADR.
+
+---
+
+## ADR-014 — Two-level constraint checking: ESLint + TypeScript AST
+
+**Date:** 2026-05
+**Status:** Accepted
+
+**Decision:** Constraint-agent uses ESLint programmatic API for static rules and TypeScript compiler API for semantic architectural rules. No LLM in the quality gate.
+
+**Rationale:** The quality gate must be deterministic. LLMs introduce non-determinism. ESLint handles import rules and style. TypeScript AST handles semantic patterns that ESLint cannot express (e.g. audit record enforcement, cross-domain call detection).
