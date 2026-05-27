@@ -268,3 +268,36 @@ costs multiple agent cycles.
 **Decision:** promotion-agent hard-blocks promotion to production if no successful staging PromotionEvent exists for the current correlation chain. This check cannot be bypassed by agent configuration.
 
 **Rationale:** Promoting untested code to production is the deployment equivalent of a GOLDEN_PRINCIPLE_BREACH. The staging gate is a non-negotiable checkpoint in the promotion chain.
+
+---
+
+## ADR-018 — Maintenance changes flow through the generate loop
+
+**Date:** 2026-05
+**Status:** Accepted
+
+**Decision:** All maintenance agent code changes are queued as typed MaintenanceIntents and processed by the generate layer. They go through the quality gate and deploy layer like any other change. Direct fixes are only permitted for additive context file documentation updates (drift-agent only).
+
+**Rationale:** Maintenance changes that bypass the quality gate are a safety risk — the same architectural constraints that apply to feature code apply to maintenance code. Routing through the generate loop ensures consistency, auditability, and human visibility.
+
+---
+
+## ADR-019 — Typed MaintenanceIntentType — no free-form intent strings from agents
+
+**Date:** 2026-05
+**Status:** Accepted
+
+**Decision:** Maintenance agents queue typed MaintenanceIntent objects with structured fields (type, priority, affectedFiles, evidence, suggestedAction). They never queue free-form natural language strings as intents.
+
+**Rationale:** Structured intents give the generate layer's intent-agent known context — affected files and observed evidence — enabling more precise IntentSpec production with fewer ambiguities. Free-form strings from agents waste tokens on re-parsing information the agent already has.
+
+---
+
+## ADR-020 — Monitoring adapter pattern for evaluation-agent
+
+**Date:** 2026-05
+**Status:** Accepted
+
+**Decision:** evaluation-agent never calls monitoring systems directly. All calls go through a typed MonitoringAdapter interface, resolved from HARNESS.json at startup. Supported: Prometheus, Datadog, Azure Monitor.
+
+**Rationale:** Same principle as pipeline and scanner adapters. Client monitoring platforms vary — the adapter pattern keeps agent code system-agnostic. Threshold logic lives in the agent, not the adapter.
