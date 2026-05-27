@@ -235,3 +235,36 @@ costs multiple agent cycles.
 **Decision:** Constraint-agent uses ESLint programmatic API for static rules and TypeScript compiler API for semantic architectural rules. No LLM in the quality gate.
 
 **Rationale:** The quality gate must be deterministic. LLMs introduce non-determinism. ESLint handles import rules and style. TypeScript AST handles semantic patterns that ESLint cannot express (e.g. audit record enforcement, cross-domain call detection).
+
+---
+
+## ADR-015 — Deploy layer: pipeline adapter pattern
+
+**Date:** 2026-05
+**Status:** Accepted
+
+**Decision:** All CI/CD system calls go through a typed PipelineAdapter interface. The active adapter is resolved from HARNESS.json at startup. Agents never call CI/CD systems directly.
+
+**Rationale:** Same principle as the DB adapter pattern. Keeps agent code system-agnostic. Adding a new CI/CD system requires only a new adapter — no agent code changes.
+
+---
+
+## ADR-016 — Deploy layer: scanner interpreter pattern
+
+**Date:** 2026-05
+**Status:** Accepted
+
+**Decision:** Each enterprise security scanner has a dedicated ScannerInterpreter. The severity mapping (CRITICAL/HIGH → GOLDEN_PRINCIPLE_BREACH, MEDIUM → CONSTRAINT_VIOLATION, LOW/INFO → LINT_FAILURE) is fixed and cannot be changed without a new ADR. Configured in HARNESS.json per project.
+
+**Rationale:** Enterprise scanners differ in output format but share the same platform signal taxonomy. Interpreters isolate format parsing from signal logic. The fixed severity mapping ensures GP-007 is enforced consistently regardless of which scanner the client uses.
+
+---
+
+## ADR-017 — Production promotion requires confirmed staging run
+
+**Date:** 2026-05
+**Status:** Accepted
+
+**Decision:** promotion-agent hard-blocks promotion to production if no successful staging PromotionEvent exists for the current correlation chain. This check cannot be bypassed by agent configuration.
+
+**Rationale:** Promoting untested code to production is the deployment equivalent of a GOLDEN_PRINCIPLE_BREACH. The staging gate is a non-negotiable checkpoint in the promotion chain.
