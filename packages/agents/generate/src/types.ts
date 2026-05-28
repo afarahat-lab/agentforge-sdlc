@@ -191,3 +191,36 @@ export interface GateFeedback {
   signals: FeedbackSignal[];
   receivedAt: Date;
 }
+
+// ─── Design artifact ──────────────────────────────────────────────────────────
+
+export interface DomainChange {
+  entityName: string;
+  operation: 'create' | 'update';
+  fields: Array<{ name: string; type: string; required: boolean }>;
+  relationships: Array<{ entity: string; type: string }>;
+}
+
+export interface ApiContract {
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  path: string;
+  description: string;
+  requestBody?: Record<string, string>;
+  responseBody?: Record<string, string>;
+  authRequired: boolean;
+  roles: string[];
+}
+
+export interface ComponentSpec {
+  name: string;
+  type: 'page' | 'component' | 'hook' | 'service';
+  description: string;
+  props?: Record<string, string>;
+}
+
+export interface DesignArtifact {
+  correlationId: string;
+  domainChanges: DomainChange[];
+  apiContracts: ApiContract[];
+  componentSpecs: ComponentSpec[];
+}

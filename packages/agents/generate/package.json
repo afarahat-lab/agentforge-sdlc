@@ -2,15 +2,22 @@
   "name": "@gestalt/agents-generate",
   "version": "0.1.0",
   "private": true,
-  "description": "Generate layer agents — design, context, code, test, lint-config",
+  "description": "Generate layer agents — intent, design, context, lint-config, code, test",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest run",
-    "lint": "eslint src/",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@gestalt/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
   }
 }
