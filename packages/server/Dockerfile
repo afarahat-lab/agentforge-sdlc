@@ -90,7 +90,7 @@ RUN addgroup -S gestalt && adduser -S gestalt -G gestalt \
 USER gestalt
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
-  CMD wget -qO- http://localhost:3000/health || exit 1
+  CMD wget -qO- http://127.0.0.1:3000/health || exit 1
 
 EXPOSE 3000
 CMD ["node", "packages/server/dist/server.js"]

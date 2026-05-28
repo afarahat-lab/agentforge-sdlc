@@ -82,6 +82,8 @@ export async function runContextAgent(
       severity: 'high',
       sourceAgent: 'context-agent',
       message: `Context agent failed: ${lastError?.message ?? 'unknown error'}`,
+      autoResolvable: false,
+      createdAt: new Date(),
     }],
     tokensUsed: 0,
     durationMs: Date.now() - startedAt,

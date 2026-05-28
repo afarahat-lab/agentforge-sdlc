@@ -9,11 +9,10 @@
 
 import { writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
-import { GestaltApiClient } from '../api/client';
 import { loadCliConfig, updateCliConfig } from '../ui/config';
 import {
   c, blank, divider, printBanner, createSpinner,
-  prompt, promptSecret, confirm, select, printLocalAuthWarning,
+  prompt, promptSecret, confirm, select,
 } from '../ui/prompts';
 
 const LLM_PROVIDERS = [
@@ -37,7 +36,6 @@ export async function initCommand(): Promise<void> {
   blank();
 
   const config = await loadCliConfig();
-  const client = new GestaltApiClient({ serverUrl: config.serverUrl });
 
   // ─── Phase 0 — LLM bootstrap ───────────────────────────────────────────────
 
@@ -54,9 +52,8 @@ export async function initCommand(): Promise<void> {
     baseUrl = defaults.baseUrl;
   }
 
-  let apiKey = '';
   if (providerType !== 'ollama') {
-    apiKey = await promptSecret('API Key');
+    await promptSecret('API Key');
   }
 
   let model = await prompt(`Model name [${defaults.model || 'required'}]`);

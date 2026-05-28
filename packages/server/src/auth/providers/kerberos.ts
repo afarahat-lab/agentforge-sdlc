@@ -35,7 +35,7 @@ import type {
 export class WindowsKerberosProvider implements AuthProvider {
   readonly type = 'windows-kerberos' as const;
 
-  constructor(private readonly config: WindowsKerberosConfig) {}
+  constructor(_config: WindowsKerberosConfig) {}
 
   /**
    * Returns true if the request contains a Negotiate authorization header.

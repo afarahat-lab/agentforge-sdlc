@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useDashboardApi } from '../hooks/useApi';
 import { useLiveEvent } from '../hooks/useLiveEvents';
 import { PageHeader, Card, EmptyState } from '../components/shared/PageHeader';

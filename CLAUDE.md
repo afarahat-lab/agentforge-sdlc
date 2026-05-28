@@ -260,3 +260,21 @@ Next task for Claude Code:
 - No direct LLM calls outside @gestalt/core/llm
 - GOLDEN_PRINCIPLE_BREACH signals are never auto-resolved
 - All state-changing operations write an audit record (GP-002)
+
+---
+
+### Session 2026-05-28 — Design chat review
+
+Evaluation: Claude Code session was clean and well-aligned. No architectural drift detected.
+
+One item flagged for future attention:
+- `packages/cli/package.json` uses chalk@4 and ora@5 (CJS-compatible downgrades).
+  These are intentionally pinned. When CLI enhancement work begins, migrate the
+  CLI package to ESM (add `"type": "module"` to package.json, add `.js` extensions
+  to all relative imports, update Dockerfile) so chalk@5+ and ora@8+ can be used.
+  Do not upgrade chalk/ora without doing the full ESM migration — it will break the build.
+
+- `toTaskPriority()` mapper exists in `packages/server/src/routes/intents.ts`
+  because `IntentRecord.priority` uses `'low'` but core `TaskPriority` uses
+  `'background'`. If priority levels are ever extended, both types need updating
+  together.

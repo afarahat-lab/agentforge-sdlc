@@ -130,5 +130,7 @@ function buildAmbiguitySignals(
       severity: 'high' as const,
       sourceAgent: 'intent-agent' as const,
       message: `Ambiguity detected: ${a.description}. Options: ${a.options.join(' | ')}`,
+      autoResolvable: true,
+      createdAt: new Date(),
     }));
 }

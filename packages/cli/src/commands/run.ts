@@ -9,7 +9,7 @@ import { GestaltApiClient } from '../api/client';
 import { loadCliConfig } from '../ui/config';
 import {
   c, blank, divider, createSpinner,
-  statusBadge, priorityBadge,
+  statusBadge,
 } from '../ui/prompts';
 import type { RunOptions } from '../types';
 

@@ -42,7 +42,7 @@ async function showPlatformStatus(
   spinner.start();
 
   try {
-    const [statusRes, agentsRes] = await Promise.all([
+    const [, agentsRes] = await Promise.all([
       client.getStatus(),
       client.getActiveAgents(),
     ]);

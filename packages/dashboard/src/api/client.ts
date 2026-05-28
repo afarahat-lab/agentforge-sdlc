@@ -8,6 +8,7 @@
 import type {
   IntentSummary, IntentDetail, Alert, InterventionRequest,
   InterventionRecord, MaintenanceRunSummary, LiveEvent, DashboardUser,
+  AgentExecutionSummary,
 } from '../types';
 
 export class DashboardApiClient {
@@ -35,15 +36,26 @@ export class DashboardApiClient {
   // ─── Intents ───────────────────────────────────────────────────────────────
 
   async listIntents(params?: {
+    projectId?: string;
     status?: string;
     limit?: number;
     offset?: number;
-  }): Promise<{ intents: IntentSummary[]; total: number }> {
+  }): Promise<{ data: IntentSummary[]; total: number }> {
     return this.get('/intents', params);
   }
 
-  async getIntent(id: string): Promise<IntentDetail> {
+  async getIntent(id: string): Promise<{ data: IntentDetail }> {
     return this.get(`/intents/${id}`);
+  }
+
+  async clarifyIntent(id: string, body: { clarification: string; ambiguityId: string }): Promise<{ data: { resumed: true } }> {
+    return this.post(`/intents/${id}/clarify`, body);
+  }
+
+  // ─── Active agents ─────────────────────────────────────────────────────────
+
+  async getActiveAgents(): Promise<{ data: AgentExecutionSummary[] }> {
+    return this.get('/status/agents');
   }
 
   // ─── Alerts ────────────────────────────────────────────────────────────────
@@ -144,7 +156,3 @@ export class ApiError extends Error {
     super(`API error ${status}: ${body}`);
   }
 }
-
-  async getActiveAgents(): Promise<{ data: AgentExecutionSummary[] }> {
-    return this.get('/status/agents');
-  }

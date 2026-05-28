@@ -20,4 +20,4 @@ export { createMaintenanceScheduler } from './schedulers/scheduler';
 
 export { PrometheusAdapter }   from './adapters/monitoring/prometheus';
 export { DatadogAdapter }      from './adapters/monitoring/datadog';
-export { AzuremonitorAdapter } from './adapters/monitoring/azure-monitor';
+export { AzureMonitorAdapter } from './adapters/monitoring/azure-monitor';

@@ -23,7 +23,7 @@
  */
 
 import type {
-  RegistryEntry, RegistryTier, PromotionRequest, PromotionCriteria,
+  RegistryEntry, RegistryTier, PromotionCriteria,
 } from '../types';
 
 const PROMOTION_THRESHOLDS: Record<string, PromotionCriteria> = {

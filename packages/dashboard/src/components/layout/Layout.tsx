@@ -16,7 +16,7 @@ export function Layout() {
   const api = useDashboardApi();
   const navigate = useNavigate();
   const [alertCount, setAlertCount] = useState(0);
-  const [connected, setConnected] = useState(true);
+  const [connected] = useState(true);
 
   // Track unacknowledged alerts
   useLiveEvent('alert.created', () => {

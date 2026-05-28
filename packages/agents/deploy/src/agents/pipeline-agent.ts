@@ -114,7 +114,7 @@ function interpretStageResults(
   correlationId: string,
   stages: StageResult[],
   scannerInterpreter: ScannerInterpreter | null,
-  scannerConfig: DeployTask['harnessConfig']['pipeline']['securityScanner'],
+  _scannerConfig: DeployTask['harnessConfig']['pipeline']['securityScanner'],
 ): DeploySignal[] {
   const signals: DeploySignal[] = [];
 

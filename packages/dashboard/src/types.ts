@@ -33,6 +33,7 @@ export interface IntentSummary {
 
 export interface AgentExecutionSummary {
   id: string;
+  correlationId: string;
   agentRole: string;
   status: 'queued' | 'running' | 'completed' | 'skipped' | 'failed';
   durationMs: number | null;
@@ -182,6 +183,7 @@ export type LiveEventType =
   | 'gate.completed'
   | 'deployment.updated'
   | 'alert.created'
+  | 'alert.acknowledged'
   | 'maintenance.run-completed';
 
 export interface LiveEvent {

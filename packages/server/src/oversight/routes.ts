@@ -43,30 +43,7 @@ export async function registerOversightRoutes(app: FastifyInstance): Promise<voi
     // 4. Emit live event: 'alert.acknowledged'
   });
 
-  // GET /events — Server-Sent Events stream
-  app.get('/events', async (req, reply) => {
-    reply.raw.setHeader('Content-Type', 'text/event-stream');
-    reply.raw.setHeader('Cache-Control', 'no-cache');
-    reply.raw.setHeader('Connection', 'keep-alive');
-    reply.raw.flushHeaders();
-
-    // Phase 2: subscribe to platform event bus and stream to client
-    // const unsubscribe = eventBus.subscribe((event) => {
-    //   reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
-    // });
-
-    req.raw.on('close', () => {
-      // unsubscribe();
-      reply.raw.end();
-    });
-
-    // Keep-alive ping every 30 seconds
-    const ping = setInterval(() => {
-      reply.raw.write(': ping\n\n');
-    }, 30_000);
-
-    req.raw.on('close', () => clearInterval(ping));
-  });
+  // Note: GET /events is registered by routes/events.ts (the canonical SSE endpoint)
 
   // GET /maintenance/runs
   app.get('/maintenance/runs', async (_req, _reply) => {
@@ -79,11 +56,3 @@ export async function registerOversightRoutes(app: FastifyInstance): Promise<voi
   });
 }
 
-// ─── Types used by oversight routes ──────────────────────────────────────────
-
-export interface InterventionRequest {
-  alertId: string;
-  correlationId: string;
-  type: 'approve-promotion' | 'reject-promotion' | 'provide-clarification' | 'acknowledge-breach';
-  payload: Record<string, unknown>;
-}

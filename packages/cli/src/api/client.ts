@@ -129,8 +129,15 @@ export class GestaltApiClient {
    */
   async *streamEvents(): AsyncGenerator<Record<string, unknown>> {
     const url = `${this.baseUrl}/events?token=${encodeURIComponent(this.token ?? '')}`;
-    const { EventSource } = await import('eventsource');
-    const source = new EventSource(url);
+    const EventSourceMod = (await import('eventsource')) as unknown as {
+      default: typeof import('eventsource');
+    };
+    const EventSourceCtor = (EventSourceMod.default ?? EventSourceMod) as unknown as new (url: string) => {
+      onmessage: ((e: { data: string }) => void) | null;
+      onerror: ((e: unknown) => void) | null;
+      close: () => void;
+    };
+    const source = new EventSourceCtor(url);
 
     try {
       for await (const event of eventSourceToAsyncIterable(source)) {
@@ -182,8 +189,14 @@ export class ApiClientError extends Error {
 
 // ─── SSE helper ───────────────────────────────────────────────────────────────
 
+interface EventSourceLike {
+  onmessage: ((e: { data: string }) => void) | null;
+  onerror: ((e: unknown) => void) | null;
+  close: () => void;
+}
+
 function eventSourceToAsyncIterable(
-  source: InstanceType<Awaited<typeof import('eventsource')>['EventSource']>,
+  source: EventSourceLike,
 ): AsyncIterable<Record<string, unknown>> {
   return {
     [Symbol.asyncIterator]() {

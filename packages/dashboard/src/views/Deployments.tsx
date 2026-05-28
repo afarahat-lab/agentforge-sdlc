@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useDashboardApi } from '../hooks/useApi';
 import { useLiveEvent } from '../hooks/useLiveEvents';
 import { StatusBadge } from '../components/shared/StatusBadge';
-import { PageHeader, Card, EmptyState, LoadingSpinner, Button } from '../components/shared/PageHeader';
+import { PageHeader, Card, EmptyState, LoadingSpinner } from '../components/shared/PageHeader';
 import type { IntentSummary } from '../types';
 
 export function Deployments() {

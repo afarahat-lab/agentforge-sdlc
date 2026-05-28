@@ -46,6 +46,8 @@ export async function runCodeAgent(
       severity: 'high',
       sourceAgent: 'code-agent',
       message: `Code agent failed: ${lastError?.message}`,
+      autoResolvable: false,
+      createdAt: new Date(),
     }],
     tokensUsed: 0,
     durationMs: Date.now() - startedAt,

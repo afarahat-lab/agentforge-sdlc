@@ -9,7 +9,7 @@
 
 import type {
   DeployTask, DeployAgentResult, PromotionEvent,
-  Environment, EnvironmentStrategy,
+  Environment,
 } from '../types';
 
 /**

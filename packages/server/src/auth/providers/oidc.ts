@@ -12,10 +12,12 @@
  *
  * Full implementation: Phase 2.
  */
-import type { AuthProvider, VerifiedIdentity, IncomingRequest, OutgoingResponse } from '../types';
+import type { AuthProvider, OidcConfig, VerifiedIdentity, IncomingRequest, OutgoingResponse } from '../types';
 
 export class OidcProvider implements AuthProvider {
   readonly type = 'oidc' as const;
+
+  constructor(_config: OidcConfig) {}
 
   canHandle(_req: IncomingRequest): boolean {
     throw new Error('OidcProvider.canHandle not yet implemented — pending Phase 2');

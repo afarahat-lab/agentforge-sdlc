@@ -75,6 +75,8 @@ function failedResult(
       severity: 'high',
       sourceAgent: agentRole,
       message: `${agentRole} failed: ${error?.message ?? 'unknown error'}`,
+      autoResolvable: false,
+      createdAt: new Date(),
     }],
     tokensUsed: 0,
     durationMs: Date.now() - startedAt,

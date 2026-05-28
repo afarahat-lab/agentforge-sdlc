@@ -12,10 +12,12 @@
  *
  * Full implementation: Phase 2.
  */
-import type { AuthProvider, VerifiedIdentity, IncomingRequest, OutgoingResponse } from '../types';
+import type { AuthProvider, SamlConfig, VerifiedIdentity, IncomingRequest, OutgoingResponse } from '../types';
 
 export class SamlProvider implements AuthProvider {
   readonly type = 'saml' as const;
+
+  constructor(_config: SamlConfig) {}
 
   canHandle(_req: IncomingRequest): boolean {
     throw new Error('SamlProvider.canHandle not yet implemented — pending Phase 2');

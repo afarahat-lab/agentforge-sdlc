@@ -7,18 +7,24 @@
  * POST /intents/:id/clarify — provide clarification for a CONTEXT_GAP
  */
 
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import { getRepositories, dispatch, createContextLogger } from '@gestalt/core';
-import type { TaskMessage } from '@gestalt/core';
+import type { TaskMessage, TaskPriority } from '@gestalt/core';
 import { emitLiveEvent } from '../events';
 import { requireRole } from '../auth/middleware';
 
 const log = createContextLogger({ module: 'routes:intents' });
 
+type IntentPriority = 'critical' | 'high' | 'normal' | 'low';
+
+function toTaskPriority(priority: IntentPriority): TaskPriority {
+  return priority === 'low' ? 'background' : priority;
+}
+
 interface SubmitIntentBody {
   text: string;
   projectId: string;
-  priority?: 'critical' | 'high' | 'normal' | 'low';
+  priority?: IntentPriority;
 }
 
 interface ListIntentsQuery {
@@ -70,7 +76,7 @@ export async function registerIntentRoutes(app: FastifyInstance): Promise<void> 
         type: 'generate:intent',
         sourceAgent: 'orchestrator',
         targetAgent: 'intent-agent',
-        priority,
+        priority: toTaskPriority(priority),
         payload: { intentId: intent.id, text: intent.text, projectId },
         createdAt: new Date(),
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
@@ -173,7 +179,7 @@ export async function registerIntentRoutes(app: FastifyInstance): Promise<void> 
         type: 'generate:intent',
         sourceAgent: 'orchestrator',
         targetAgent: 'orchestrator',
-        priority: intent.priority,
+        priority: toTaskPriority(intent.priority),
         payload: { intentId: intent.id, clarification, ambiguityId, resume: true },
         createdAt: new Date(),
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),

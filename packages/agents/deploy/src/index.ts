@@ -15,9 +15,9 @@ export { runPipelineAgent }           from './agents/pipeline-agent';
 export { runPromotionAgent }          from './agents/promotion-agent';
 
 // Pipeline adapters
-export { GithubactionsAdapter }  from './adapters/pipeline/github-actions';
-export { AzuredevopsAdapter }    from './adapters/pipeline/azure-devops';
-export { GitlabciAdapter }       from './adapters/pipeline/gitlab-ci';
+export { GithubActionsAdapter }  from './adapters/pipeline/github-actions';
+export { AzureDevopsAdapter }    from './adapters/pipeline/azure-devops';
+export { GitlabCiAdapter }       from './adapters/pipeline/gitlab-ci';
 export { JenkinsAdapter }        from './adapters/pipeline/jenkins';
 
 // Scanner interpreters

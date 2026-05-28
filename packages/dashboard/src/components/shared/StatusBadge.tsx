@@ -1,4 +1,3 @@
-import React from 'react';
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; symbol: string }> = {
   'pending':                   { label: 'pending',        color: 'var(--text-dim)', symbol: '○' },

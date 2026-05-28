@@ -18,7 +18,7 @@
  */
 
 import type {
-  AuthProvider, AuthProviderConfig, IdentityConfig,
+  AuthProvider, IdentityConfig,
   PlatformUser, VerifiedIdentity, IncomingRequest, OutgoingResponse,
 } from './types';
 import { resolveRole, isDenied } from './role-mapper';
@@ -138,17 +138,17 @@ export async function createAuthManager(
 
     switch (providerConfig.type) {
       case 'windows-kerberos': {
-        const { WindowsKerberosProvider } = await import('./providers/kerberos');
+        const { WindowsKerberosProvider } = await import('./providers/kerberos.js');
         manager.registerProvider(new WindowsKerberosProvider(providerConfig));
         break;
       }
       case 'saml': {
-        const { SamlProvider } = await import('./providers/saml');
+        const { SamlProvider } = await import('./providers/saml.js');
         manager.registerProvider(new SamlProvider(providerConfig));
         break;
       }
       case 'oidc': {
-        const { OidcProvider } = await import('./providers/oidc');
+        const { OidcProvider } = await import('./providers/oidc.js');
         manager.registerProvider(new OidcProvider(providerConfig));
         break;
       }
@@ -161,7 +161,7 @@ export async function createAuthManager(
           );
           break;
         }
-        const { LocalProvider } = await import('./providers/local');
+        const { LocalProvider } = await import('./providers/local.js');
         manager.registerProvider(new LocalProvider(providerConfig));
         break;
       }

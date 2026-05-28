@@ -16,7 +16,7 @@
  * Full implementation: Phase 2.
  */
 
-import type { Alert, AlertSeverity, AlertAction } from '../../../dashboard/src/types';
+import type { Alert, AlertSeverity, AlertAction } from './types';
 
 export type NotificationChannel = 'dashboard' | 'email' | 'slack' | 'webhook';
 
@@ -75,7 +75,7 @@ export function resolveChannels(
  * Phase 2: full implementation per channel.
  */
 export async function sendAlertNotification(
-  alert: Alert,
+  _alert: Alert,
   channels: NotificationChannel[],
 ): Promise<void> {
   for (const channel of channels) {
