@@ -1,16 +1,30 @@
 {
-  "name": "@agentforge-sdlc/cli",
+  "name": "@gestalt/cli",
   "version": "0.1.0",
-  "private": true,
-  "description": "Developer-facing CLI tool — agentforge init, run, status, logs, dashboard",
+  "private": false,
+  "description": "Gestalt CLI — agent-first software development platform",
+  "bin": {
+    "gestalt": "dist/index.js"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc --watch",
+    "build": "tsc && chmod +x dist/index.js",
+    "dev": "tsx watch src/index.ts",
     "test": "vitest run",
-    "lint": "eslint src/",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.0.0",
+    "eventsource": "^2.0.2",
+    "ora": "^8.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
   }
 }

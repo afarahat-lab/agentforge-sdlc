@@ -1,6 +1,6 @@
-# @agentforge-sdlc/core
+# @gestalt/core
 
-The nervous system of AgentForge SDLC. Every other package depends on this; it depends on nothing internal.
+The nervous system of Gestalt. Every other package depends on this; it depends on nothing internal.
 
 ---
 
@@ -25,7 +25,7 @@ The nervous system of AgentForge SDLC. Every other package depends on this; it d
 
 ## Must never
 
-- Import from any other @agentforge-sdlc/* package
+- Import from any other @gestalt/* package
 - Call an LLM provider SDK directly — the abstraction lives here
 - Access the database directly — only the repository interface
 - Read process.env directly — always use core/config

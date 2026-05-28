@@ -1,4 +1,4 @@
-# Registry & Ecosystem — AgentForge SDLC
+# Registry & Ecosystem — Gestalt
 
 Version: 0.1.0
 Layer: 8
@@ -36,7 +36,7 @@ Currently includes: `corporate-ops-web-mobile` template.
 
 ### Tier 2 — Verified registry
 Community-contributed. Reviewed and badged by maintainers. Not shipped by default —
-pulled on demand during `agentforge init`. Safe to use in production.
+pulled on demand during `gestalt init`. Safe to use in production.
 
 ### Tier 3 — Community registry
 Open contributions. No review. Explicit warning shown before installation.
@@ -86,24 +86,24 @@ This means:
 
 ```bash
 # Search the registry
-agentforge registry search "fintech compliance"
-agentforge registry search --type harness-template --tier tier2
+gestalt registry search "fintech compliance"
+gestalt registry search --type harness-template --tier tier2
 
 # Get details on an entry
-agentforge registry info corporate-ops-web-mobile
+gestalt registry info corporate-ops-web-mobile
 
 # Install a registry entry
-agentforge registry install fintech-saml-principles
+gestalt registry install fintech-saml-principles
 
 # Submit a contribution
-agentforge registry submit \
+gestalt registry submit \
   --name "MySQL Adapter" \
   --type db-adapter \
-  --git https://github.com/myorg/agentforge-mysql \
+  --git https://github.com/myorg/gestalt-mysql \
   --ref v1.0.0
 
 # Check promotion readiness
-agentforge registry promotion-check my-template-slug
+gestalt registry promotion-check my-template-slug
 ```
 
 ---
@@ -130,7 +130,7 @@ Includes:
 1. Create a repository with your harness template or adapter
 2. Ensure `AGENTS.md` and `HARNESS.json` are present
 3. Write a meaningful `README.md` (200+ chars)
-4. Run: `agentforge registry submit --git <your-repo-url> --ref <version-tag>`
+4. Run: `gestalt registry submit --git <your-repo-url> --ref <version-tag>`
 5. Automated checks run — all must pass for Tier 3 acceptance
 
 ### Path to Tier 2 verification
@@ -156,7 +156,7 @@ an internal mirror in HARNESS.json:
 
 ```json
 "registry": {
-  "mirrorUrl": "https://registry.company.com/agentforge"
+  "mirrorUrl": "https://registry.company.com/gestalt"
 }
 ```
 

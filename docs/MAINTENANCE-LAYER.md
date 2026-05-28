@@ -1,4 +1,4 @@
-# Continuous Maintenance Layer — AgentForge SDLC
+# Continuous Maintenance Layer — Gestalt
 
 Version: 0.1.0
 Layer: 6

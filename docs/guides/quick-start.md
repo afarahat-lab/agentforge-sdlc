@@ -1,4 +1,4 @@
-# Quick Start — AgentForge SDLC
+# Quick Start — Gestalt
 
 Get up and running in under 10 minutes using local authentication.
 For production deployments with corporate identity integration, see the [Deployment Guide](./deployment.md).
@@ -21,8 +21,8 @@ No Node.js installation required — the platform runs entirely in Docker.
 ## Step 1 — Clone the repository
 
 ```bash
-git clone https://github.com/afarahat-lab/agentforge-sdlc.git
-cd agentforge-sdlc
+git clone https://github.com/afarahat-lab/gestalt.git
+cd gestalt
 ```
 
 ---
@@ -47,8 +47,8 @@ JWT_SECRET=choose-a-long-random-string
 
 # Optional: leave as defaults for local development
 SERVER_PORT=3000
-POSTGRES_USER=agentforge
-POSTGRES_DB=agentforge
+POSTGRES_USER=gestalt
+POSTGRES_DB=gestalt
 ```
 
 **LLM provider options:**
@@ -79,9 +79,9 @@ docker-compose up -d
 ```
 
 This starts three containers:
-- `agentforge-server` — the main server (port 3000)
-- `agentforge-postgres` — PostgreSQL database
-- `agentforge-redis` — Redis message queue
+- `gestalt-server` — the main server (port 3000)
+- `gestalt-postgres` — PostgreSQL database
+- `gestalt-redis` — Redis message queue
 
 Wait for all containers to be healthy:
 
@@ -96,10 +96,10 @@ docker-compose ps
 
 ```bash
 # Install the CLI (run once)
-npm install -g @agentforge-sdlc/cli
+npm install -g @gestalt/cli
 
 # Create the first admin user (local fallback mode)
-agentforge init local-admin
+gestalt init local-admin
 # Follow the prompts: email + password
 
 # You will see a non-production warning — this is expected for local auth
@@ -124,7 +124,7 @@ This is expected. For production, follow the [Identity Integration Guide](./iden
 ## Step 6 — Initialize your first project
 
 ```bash
-agentforge init
+gestalt init
 ```
 
 The initializer will:
@@ -138,7 +138,7 @@ The initializer will:
 ## Step 7 — Submit your first intent
 
 ```bash
-agentforge run "Set up the initial project scaffold with folder structure and base configuration"
+gestalt run "Set up the initial project scaffold with folder structure and base configuration"
 ```
 
 Watch the dashboard at `http://localhost:3000` to see agents working.

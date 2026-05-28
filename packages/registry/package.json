@@ -1,5 +1,5 @@
 {
-  "name": "@agentforge-sdlc/registry",
+  "name": "@gestalt/registry",
   "version": "0.1.0",
   "private": true,
   "description": "Harness registry client, validator, and promotion engine",

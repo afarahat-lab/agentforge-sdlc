@@ -1,5 +1,5 @@
 /**
- * @agentforge-sdlc/agents-generate
+ * @gestalt/agents-generate
  * Public exports for the generate layer.
  */
 

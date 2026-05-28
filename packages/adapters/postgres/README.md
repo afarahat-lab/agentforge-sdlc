@@ -1,6 +1,6 @@
-# @agentforge-sdlc/adapter-postgres
+# @gestalt/adapter-postgres
 
-PostgreSQL repository adapter. The reference implementation. Implements the repository interfaces defined in @agentforge-sdlc/core. All other adapters follow this implementation as their template.
+PostgreSQL repository adapter. The reference implementation. Implements the repository interfaces defined in @gestalt/core. All other adapters follow this implementation as their template.
 
 ---
 

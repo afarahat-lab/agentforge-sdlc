@@ -1,1 +1,1 @@
-// @agentforge-sdlc/adapter-oracle — types
+// @gestalt/adapter-oracle — types

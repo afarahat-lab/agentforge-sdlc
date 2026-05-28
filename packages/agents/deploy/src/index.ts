@@ -1,5 +1,5 @@
 /**
- * @agentforge-sdlc/agents-deploy
+ * @gestalt/agents-deploy
  * Public exports for the merge and deploy layer.
  */
 

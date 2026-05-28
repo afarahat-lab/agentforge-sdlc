@@ -1,5 +1,5 @@
 {
-  "name": "@agentforge-sdlc/adapter-oracle",
+  "name": "@gestalt/adapter-oracle",
   "version": "0.1.0",
   "private": true,
   "description": "Oracle repository adapter",

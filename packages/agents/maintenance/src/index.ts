@@ -1,5 +1,5 @@
 /**
- * @agentforge-sdlc/agents-maintenance
+ * @gestalt/agents-maintenance
  * Public exports for the continuous maintenance layer.
  */
 

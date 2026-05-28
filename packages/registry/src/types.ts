@@ -1,5 +1,5 @@
 /**
- * @agentforge-sdlc/registry
+ * @gestalt/registry
  * All types for the harness registry and ecosystem layer.
  */
 

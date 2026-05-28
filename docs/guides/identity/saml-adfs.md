@@ -1,9 +1,9 @@
 # SAML 2.0 / ADFS — Identity Integration Guide
 
-Configure AgentForge SDLC as a SAML Service Provider (SP) with Active Directory
+Configure Gestalt as a SAML Service Provider (SP) with Active Directory
 Federation Services (ADFS) or any SAML 2.0 compliant Identity Provider.
 
-**Audience:** ADFS administrator + AgentForge server administrator
+**Audience:** ADFS administrator + Gestalt server administrator
 
 ---
 
@@ -22,11 +22,11 @@ a better user experience (no login redirect).
 ## SAML flow overview
 
 ```
-1. User opens https://agentforge.company.com
+1. User opens https://gestalt.company.com
 2. Server redirects to ADFS login page
 3. User enters AD credentials (or uses Windows Integrated Auth at ADFS)
 4. ADFS validates credentials and issues SAML assertion
-5. Browser POSTs assertion to AgentForge ACS URL
+5. Browser POSTs assertion to Gestalt ACS URL
 6. Server validates assertion signature against IdP certificate
 7. User identity and group claims extracted
 8. Platform role assigned, dashboard loads
@@ -34,12 +34,12 @@ a better user experience (no login redirect).
 
 ---
 
-## Step 1 — Retrieve AgentForge SP metadata
+## Step 1 — Retrieve Gestalt SP metadata
 
 Start the server and retrieve the SP metadata XML:
 
 ```bash
-curl https://agentforge.company.com/auth/saml/metadata > agentforge-sp-metadata.xml
+curl https://gestalt.company.com/auth/saml/metadata > gestalt-sp-metadata.xml
 ```
 
 This XML file contains the SP entity ID, ACS URL, and signing certificate.
@@ -55,9 +55,9 @@ You will provide this to your ADFS administrator.
 2. Navigate to: **Trust Relationships → Relying Party Trusts**
 3. Click **Add Relying Party Trust**
 4. Select **Import data about the relying party from a file**
-5. Browse to `agentforge-sp-metadata.xml`
+5. Browse to `gestalt-sp-metadata.xml`
 6. Complete the wizard with these settings:
-   - Display name: `AgentForge SDLC`
+   - Display name: `Gestalt`
    - Access control policy: Select appropriate policy for your organisation
    - Configure claim rules: See next section
 
@@ -112,9 +112,9 @@ $cert.Certificate.Export([System.Security.Cryptography.X509Certificates.X509Cont
 openssl x509 -inform DER -in adfs-signing.cer -out adfs-signing.pem
 ```
 
-Copy `adfs-signing.pem` to the AgentForge server:
+Copy `adfs-signing.pem` to the Gestalt server:
 ```bash
-/etc/agentforge/certs/adfs-signing.pem
+/etc/gestalt/certs/adfs-signing.pem
 ```
 
 ---
@@ -128,15 +128,15 @@ Copy `adfs-signing.pem` to the AgentForge server:
       "type": "saml",
       "enabled": true,
       "entryPoint": "https://adfs.company.com/adfs/ls",
-      "issuer": "agentforge-sdlc",
-      "cert": "file:///etc/agentforge/certs/adfs-signing.pem",
-      "callbackUrl": "https://agentforge.company.com/auth/saml/callback"
+      "issuer": "gestalt",
+      "cert": "file:///etc/gestalt/certs/adfs-signing.pem",
+      "callbackUrl": "https://gestalt.company.com/auth/saml/callback"
     }
   ],
   "roleMapping": [
-    { "idpGroup": "COMPANY\\AgentForge-Admins",    "platformRole": "admin" },
-    { "idpGroup": "COMPANY\\AgentForge-Operators", "platformRole": "operator" },
-    { "idpGroup": "COMPANY\\AgentForge-Viewers",   "platformRole": "viewer" }
+    { "idpGroup": "COMPANY\\Gestalt-Admins",    "platformRole": "admin" },
+    { "idpGroup": "COMPANY\\Gestalt-Operators", "platformRole": "operator" },
+    { "idpGroup": "COMPANY\\Gestalt-Viewers",   "platformRole": "viewer" }
   ],
   "defaultRole": null,
   "sessionTtlMinutes": 480
@@ -152,9 +152,9 @@ in your roleMapping idpGroup values.
 
 | Group name | Platform role |
 |---|---|
-| `AgentForge-Admins` | admin |
-| `AgentForge-Operators` | operator |
-| `AgentForge-Viewers` | viewer |
+| `Gestalt-Admins` | admin |
+| `Gestalt-Operators` | operator |
+| `Gestalt-Viewers` | viewer |
 
 Add users to groups in Active Directory Users and Computers.
 
@@ -167,7 +167,7 @@ Add users to groups in Active Directory Users and Computers.
 docker-compose restart server
 
 # Test SAML redirect
-curl -I https://agentforge.company.com/auth/saml/login
+curl -I https://gestalt.company.com/auth/saml/login
 # Expected: 302 redirect to https://adfs.company.com/adfs/ls?...
 
 # Open in browser and complete the ADFS login flow
@@ -183,7 +183,7 @@ curl -I https://agentforge.company.com/auth/saml/login
 The IdP certificate does not match. Verify:
 ```bash
 # Check certificate currently configured
-cat /etc/agentforge/certs/adfs-signing.pem
+cat /etc/gestalt/certs/adfs-signing.pem
 
 # Verify against current ADFS certificate
 curl https://adfs.company.com/FederationMetadata/2007-06/FederationMetadata.xml
@@ -200,7 +200,7 @@ Relying Party Trust claim rules. Check the SAML assertion in browser dev tools
 
 Log the raw group claims:
 ```bash
-agentforge debug saml-claims --user user@company.com
+gestalt debug saml-claims --user user@company.com
 ```
 Ensure group names in roleMapping match exactly (including DOMAIN\ prefix).
 

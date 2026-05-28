@@ -1,4 +1,4 @@
-# @agentforge-sdlc/agents-maintenance
+# @gestalt/agents-maintenance
 
 Background agents that run continuously to keep the codebase and harness aligned with architectural standards. These agents are the platform's immune system — they detect and correct drift before it accumulates.
 

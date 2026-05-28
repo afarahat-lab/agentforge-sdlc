@@ -1,4 +1,4 @@
-# Operations Runbook — AgentForge SDLC
+# Operations Runbook — Gestalt
 
 Common issues and resolution steps for platform operators.
 
@@ -12,19 +12,19 @@ Common issues and resolution steps for platform operators.
 
 **Check 1 — SPN registration:**
 ```powershell
-setspn -L COMPANY\agentforgesvc
-# Must show HTTP/agentforge.company.com
+setspn -L COMPANY\gestaltsvc
+# Must show HTTP/gestalt.company.com
 ```
 
 **Check 2 — Keytab validity:**
 ```bash
-klist -k /etc/agentforge/krb5/agentforge.keytab
-# Must show entries for HTTP/agentforge.company.com@COMPANY.COM
+klist -k /etc/gestalt/krb5/gestalt.keytab
+# Must show entries for HTTP/gestalt.company.com@COMPANY.COM
 ```
 
 **Check 3 — DNS resolution:**
 ```bash
-nslookup agentforge.company.com
+nslookup gestalt.company.com
 # Must resolve to the server IP
 ```
 
@@ -42,7 +42,7 @@ nslookup agentforge.company.com
 
 **Check group membership:**
 ```bash
-agentforge debug user-role --email user@company.com
+gestalt debug user-role --email user@company.com
 # Shows: resolved role, matched group, all IdP groups received
 ```
 
@@ -72,7 +72,7 @@ the banner cannot be dismissed — it is a permanent reminder.
 
 **Check LLM connectivity:**
 ```bash
-agentforge debug llm-ping
+gestalt debug llm-ping
 # Expected: LLM connection OK, model: gpt-4o, latency: 234ms
 ```
 
@@ -112,7 +112,7 @@ All acknowledgements are permanently recorded in the audit log.
 
 **Diagnosis:**
 ```bash
-agentforge intent-detail <correlationId>
+gestalt intent-detail <correlationId>
 # Shows all signals from each gate cycle
 ```
 
@@ -207,26 +207,26 @@ docker-compose exec server node -e "
 
 ```bash
 # Platform health check
-curl https://agentforge.company.com/health
+curl https://gestalt.company.com/health
 
 # LLM connectivity test
-agentforge debug llm-ping
+gestalt debug llm-ping
 
 # Auth debug for specific user
-agentforge debug user-role --email user@company.com
+gestalt debug user-role --email user@company.com
 
 # SAML claims debug
-agentforge debug saml-claims --user user@company.com
+gestalt debug saml-claims --user user@company.com
 
 # Queue depth
 docker-compose exec redis redis-cli INFO keyspace
 
 # Active agent count
-agentforge status
+gestalt status
 
 # Tail all logs
 docker-compose logs -f
 
 # Export audit log (last 7 days)
-agentforge audit export --days 7 --output audit-export.json
+gestalt audit export --days 7 --output audit-export.json
 ```

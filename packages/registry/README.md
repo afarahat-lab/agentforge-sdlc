@@ -1,4 +1,4 @@
-# @agentforge-sdlc/registry
+# @gestalt/registry
 
 The harness registry and ecosystem layer. Enables the community to discover,
 share, and contribute harness patterns, adapters, and golden principle packs.

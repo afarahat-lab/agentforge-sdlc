@@ -1,4 +1,4 @@
-# @agentforge-sdlc/dashboard
+# @gestalt/dashboard
 
 The React oversight dashboard. Served by the server as static assets. Gives human operators visibility into every agent decision, quality gate result, deployment, and alert — with the ability to intervene when required.
 

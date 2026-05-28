@@ -11,7 +11,7 @@
  */
 
 import type { GateTask, GateAgentResult, GateSignal, SecurityFinding, OWASPSeverity } from '../types';
-import type { SignalType } from '@agentforge-sdlc/core';
+import type { SignalType } from '@gestalt/core';
 
 /**
  * Maps OWASP severity to platform signal type.

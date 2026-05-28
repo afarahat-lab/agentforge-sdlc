@@ -1,5 +1,5 @@
 {
-  "name": "@agentforge-sdlc/agents-generate",
+  "name": "@gestalt/agents-generate",
   "version": "0.1.0",
   "private": true,
   "description": "Generate layer agents — design, context, code, test, lint-config",

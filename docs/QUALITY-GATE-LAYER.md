@@ -1,4 +1,4 @@
-# Quality Gate Layer — AgentForge SDLC
+# Quality Gate Layer — Gestalt
 
 Version: 0.1.0
 Layer: 4

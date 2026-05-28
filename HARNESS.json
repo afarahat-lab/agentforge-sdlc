@@ -1,9 +1,9 @@
 {
-  "name": "agentforge-sdlc",
+  "name": "gestalt",
   "version": "0.1.0",
   "tier": "tier1",
   "templateId": "platform-self",
-  "repository": "https://github.com/afarahat-lab/agentforge-sdlc",
+  "repository": "https://github.com/afarahat-lab/gestalt",
   "contextFiles": [
     "AGENTS.md",
     "docs/ARCHITECTURE.md",
@@ -130,7 +130,7 @@
       {
         "type": "windows-kerberos",
         "enabled": false,
-        "spn": "HTTP/agentforge.company.com",
+        "spn": "HTTP/gestalt.company.com",
         "realm": "COMPANY.COM",
         "kdcHostname": "${KDC_HOSTNAME}"
       },
@@ -138,7 +138,7 @@
         "type": "saml",
         "enabled": false,
         "entryPoint": "${SAML_ENTRY_POINT}",
-        "issuer": "agentforge-sdlc",
+        "issuer": "gestalt",
         "cert": "${SAML_IDP_CERT}",
         "callbackUrl": "${SERVER_BASE_URL}/auth/saml/callback"
       },
@@ -165,15 +165,15 @@
     ],
     "roleMapping": [
       {
-        "idpGroup": "AgentForge-Admins",
+        "idpGroup": "Gestalt-Admins",
         "platformRole": "admin"
       },
       {
-        "idpGroup": "AgentForge-Operators",
+        "idpGroup": "Gestalt-Operators",
         "platformRole": "operator"
       },
       {
-        "idpGroup": "AgentForge-Viewers",
+        "idpGroup": "Gestalt-Viewers",
         "platformRole": "viewer"
       }
     ],

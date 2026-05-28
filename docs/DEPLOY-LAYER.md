@@ -1,4 +1,4 @@
-# Merge & Deploy Layer — AgentForge SDLC
+# Merge & Deploy Layer — Gestalt
 
 Version: 0.1.0
 Layer: 5

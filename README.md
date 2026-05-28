@@ -1,14 +1,14 @@
-# AgentForge SDLC
+# Gestalt
 
 An open-source, self-hosted agent-first platform that automates the full Software Development Lifecycle (SDLC) for corporate operations web and mobile applications.
 
-AgentForge SDLC replaces manual development cycles with a closed-loop system of specialized AI agents — handling everything from design and code generation through quality enforcement, deployment, and continuous maintenance — while keeping humans in strategic control.
+Gestalt replaces manual development cycles with a closed-loop system of specialized AI agents — handling everything from design and code generation through quality enforcement, deployment, and continuous maintenance — while keeping humans in strategic control.
 
 ---
 
 ## What it does
 
-Traditional SDLC requires humans at every stage: design, code, review, test, deploy, maintain. AgentForge SDLC restructures this so agents handle execution and humans handle intent and oversight.
+Traditional SDLC requires humans at every stage: design, code, review, test, deploy, maintain. Gestalt restructures this so agents handle execution and humans handle intent and oversight.
 
 ```
 You write:   "Add a leave request approval workflow with manager and HR stages"
@@ -20,7 +20,7 @@ You see:     A dashboard showing every decision, signal, and outcome
 
 ## SDLC coverage
 
-| SDLC Phase | AgentForge SDLC capability |
+| SDLC Phase | Gestalt capability |
 |---|---|
 | Requirements | Intent capture + design agent translates to structured spec |
 | Architecture | Harness initializer generates architecture from project context |
@@ -74,22 +74,22 @@ Full architecture documentation: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 ### Install
 
 ```bash
-git clone https://github.com/afarahat-lab/agentforge-sdlc.git
-cd agentforge-sdlc
+git clone https://github.com/afarahat-lab/gestalt.git
+cd gestalt
 cp .env.example .env
 # Edit .env with your LLM endpoint, DB config, and auth settings
 docker-compose up -d
-agentforge init
+gestalt init
 ```
 
 ### CLI usage
 
 ```bash
-agentforge init              # initialize a new project — LLM-powered interview generates full harness
-agentforge run "<intent>"    # submit an intent to the generate layer
-agentforge status            # view current agent activity
-agentforge logs              # tail the execution log
-agentforge dashboard         # open the oversight dashboard
+gestalt init              # initialize a new project — LLM-powered interview generates full harness
+gestalt run "<intent>"    # submit an intent to the generate layer
+gestalt status            # view current agent activity
+gestalt logs              # tail the execution log
+gestalt dashboard         # open the oversight dashboard
 ```
 
 ---
@@ -97,7 +97,7 @@ agentforge dashboard         # open the oversight dashboard
 ## Repository structure
 
 ```
-agentforge-sdlc/
+gestalt/
 ├── docs/                          # platform architecture and decisions
 │   ├── ARCHITECTURE.md
 │   ├── DECISIONS.md
@@ -105,7 +105,7 @@ agentforge-sdlc/
 │   └── GOLDEN_PRINCIPLES.md
 ├── packages/
 │   ├── core/                      # core harness engine
-│   ├── cli/                       # agentforge CLI tool
+│   ├── cli/                       # gestalt CLI tool
 │   ├── server/                    # self-hosted server
 │   ├── dashboard/                 # React oversight dashboard
 │   ├── agents/
@@ -132,7 +132,7 @@ agentforge-sdlc/
 | Concern | Decision |
 |---|---|
 | Runtime | Self-hosted server |
-| Developer interface | CLI (`agentforge` command) |
+| Developer interface | CLI (`gestalt` command) |
 | Agent model | Ephemeral workers |
 | Message queue | BullMQ (Redis-backed) |
 | Primary database | PostgreSQL (configurable) |

@@ -1,4 +1,4 @@
-# Human Oversight Layer — AgentForge SDLC
+# Human Oversight Layer — Gestalt
 
 Version: 0.1.0
 Layer: 7
@@ -180,10 +180,10 @@ No separate frontend deployment for corporate IT to manage.
 One-time IT setup required:
 ```
 # Register the server as an SPN in Active Directory
-setspn -A HTTP/agentforge.company.com DOMAIN\serviceagentforgesvc
+setspn -A HTTP/gestalt.company.com DOMAIN\servicegestaltsvc
 
 # DNS A record
-agentforge.company.com → <server IP>
+gestalt.company.com → <server IP>
 ```
 
 After setup: all domain-joined Windows users see no login prompt. Browser
@@ -195,9 +195,9 @@ IdP group memberships → platform roles. Configured in HARNESS.json:
 
 ```json
 "roleMapping": [
-  { "idpGroup": "AgentForge-Admins",    "platformRole": "admin" },
-  { "idpGroup": "AgentForge-Operators", "platformRole": "operator" },
-  { "idpGroup": "AgentForge-Viewers",   "platformRole": "viewer" }
+  { "idpGroup": "Gestalt-Admins",    "platformRole": "admin" },
+  { "idpGroup": "Gestalt-Operators", "platformRole": "operator" },
+  { "idpGroup": "Gestalt-Viewers",   "platformRole": "viewer" }
 ]
 ```
 
@@ -209,7 +209,7 @@ Setting defaultRole: "viewer" grants read access to all authenticated corporate 
 - Enabled at init time for development environments
 - Shows non-production warning banner in dashboard
 - Hard-blocked in production (NODE_ENV=production) unless explicitly overridden
-- First admin created via: `agentforge init local-admin`
+- First admin created via: `gestalt init local-admin`
 
 ### Implementation file map (auth)
 

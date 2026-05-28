@@ -1,9 +1,9 @@
 /**
- * @agentforge-sdlc/agents-maintenance
+ * @gestalt/agents-maintenance
  * All types for the continuous maintenance layer.
  */
 
-import type { SignalType } from '@agentforge-sdlc/core';
+import type { SignalType } from '@gestalt/core';
 
 // ─── Agent roles ──────────────────────────────────────────────────────────────
 

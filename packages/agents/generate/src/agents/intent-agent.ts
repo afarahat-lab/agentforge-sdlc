@@ -42,7 +42,7 @@ export async function runIntentAgent(
             id: crypto.randomUUID(),
             correlationId: task.correlationId,
             type: 'design',
-            path: '.agentforge/intent-spec.json',
+            path: '.gestalt/intent-spec.json',
             content: JSON.stringify(spec, null, 2),
             producedBy: 'intent-agent',
             createdAt: new Date(),

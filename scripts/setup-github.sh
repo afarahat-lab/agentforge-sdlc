@@ -7,7 +7,7 @@ set -e
 
 GITHUB_USERNAME=$1
 GITHUB_TOKEN=$2
-REPO_NAME="agentforge-sdlc"
+REPO_NAME="gestalt"
 
 if [ -z "$GITHUB_USERNAME" ] || [ -z "$GITHUB_TOKEN" ]; then
   echo "Usage: ./scripts/setup-github.sh <github-username> <github-token>"
@@ -25,7 +25,7 @@ git init
 git add .
 git commit -m "chore: initial project structure
 
-Sets up the AgentForge SDLC monorepo with:
+Sets up the Gestalt monorepo with:
 - Full documentation (ARCHITECTURE.md, DECISIONS.md, DOMAIN.md,
   GOLDEN_PRINCIPLES.md, INITIALIZER.md)
 - AGENTS.md for agent orientation

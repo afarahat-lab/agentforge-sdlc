@@ -1,6 +1,6 @@
 # Identity Integration — Overview
 
-AgentForge SDLC integrates with your corporate identity system. Users are managed
+Gestalt integrates with your corporate identity system. Users are managed
 in your existing IdP — the platform never owns user passwords or manages
 the user lifecycle.
 
@@ -72,9 +72,9 @@ They are separate from human user authentication.
 ## Deprovisioning
 
 When a user leaves the organisation:
-- Remove them from the AD groups (AgentForge-Admins/Operators/Viewers)
+- Remove them from the AD groups (Gestalt-Admins/Operators/Viewers)
 - Their existing JWT sessions expire within `sessionTtlMinutes` (default: 8 hours)
-- No action required in AgentForge — the platform does not own the identity
+- No action required in Gestalt — the platform does not own the identity
 
 For immediate access revocation, restart the server to invalidate all sessions:
 ```bash

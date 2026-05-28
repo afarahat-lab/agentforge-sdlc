@@ -1,4 +1,4 @@
-# @agentforge-sdlc/server
+# @gestalt/server
 
 The self-hosted Fastify server. The coordination hub for everything. Receives intent from the CLI, dispatches to the queue, manages project state, serves the dashboard, and exposes the oversight API.
 

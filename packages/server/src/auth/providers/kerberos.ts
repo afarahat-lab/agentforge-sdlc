@@ -14,9 +14,9 @@
  *
  * Prerequisites (one-time IT setup):
  *   - Server registered as SPN in Active Directory:
- *     setspn -A HTTP/agentforge.company.com DOMAIN\serviceaccount
+ *     setspn -A HTTP/gestalt.company.com DOMAIN\serviceaccount
  *   - Service account keytab file placed at path configured in HARNESS.json
- *   - DNS A record for agentforge.company.com pointing to server
+ *   - DNS A record for gestalt.company.com pointing to server
  *
  * Browser compatibility:
  *   - Chrome/Edge on Windows domain machines: automatic (no prompt)

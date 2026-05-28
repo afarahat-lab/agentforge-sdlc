@@ -1,1 +1,1 @@
-// @agentforge-sdlc/adapter-postgres — types
+// @gestalt/adapter-postgres — types

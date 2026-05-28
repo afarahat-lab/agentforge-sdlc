@@ -1,12 +1,12 @@
 {
-  "name": "agentforge-sdlc",
+  "name": "gestalt",
   "version": "0.1.0",
   "private": true,
   "description": "Open-source self-hosted agent-first platform for the full Software Development Lifecycle",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/afarahat-lab/agentforge-sdlc.git"
+    "url": "https://github.com/afarahat-lab/gestalt.git"
   },
   "engines": {
     "node": ">=20.0.0",

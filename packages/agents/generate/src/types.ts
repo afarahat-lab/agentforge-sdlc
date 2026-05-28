@@ -1,9 +1,9 @@
 /**
- * @package @agentforge-sdlc/agents-generate
+ * @package @gestalt/agents-generate
  * All types for the generate layer.
  */
 
-import type { AgentRole, ArtifactType, SignalType } from '@agentforge-sdlc/core';
+import type { AgentRole, ArtifactType, SignalType } from '@gestalt/core';
 
 // ─── Execution graph ─────────────────────────────────────────────────────────
 

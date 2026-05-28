@@ -20,8 +20,8 @@ import type {
   GateVerdict,
   RetryRecommendation,
 } from '../types';
-import type { AgentRole } from '@agentforge-sdlc/core';
-import type { OrchestratorState } from '@agentforge-sdlc/agents-generate';
+import type { AgentRole } from '@gestalt/core';
+import type { OrchestratorState } from '@gestalt/agents-generate';
 
 /**
  * Synthesises all gate agent results into a final GateResult.

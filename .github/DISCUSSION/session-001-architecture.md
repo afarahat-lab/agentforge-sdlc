@@ -10,7 +10,7 @@ platform vision, architecture decisions, Layer 1 (core harness engine), Layer 2 
 ## Key references
 
 - OpenAI article: https://openai.com/index/harness-engineering/
-- Repository: https://github.com/afarahat-lab/agentforge-sdlc
+- Repository: https://github.com/afarahat-lab/gestalt
 
 ---
 
@@ -31,7 +31,7 @@ corporate operations web and mobile applications.
 
 | # | Decision | Choice |
 |---|---|---|
-| ADR-001 | Runtime model | Self-hosted server + CLI interface (`agentforge` command) |
+| ADR-001 | Runtime model | Self-hosted server + CLI interface (`gestalt` command) |
 | ADR-002 | Agent execution | Ephemeral workers |
 | ADR-003 | Message queue | BullMQ + Redis |
 | ADR-004 | Database abstraction | Repository pattern, PostgreSQL default |
@@ -91,7 +91,7 @@ Full spec: docs/INITIALIZER.md
 
 ## Naming history
 
-- Started as `openharness` → renamed to `agentforge-sdlc` to avoid name collision
+- Started as `openharness` → renamed to `gestalt` to avoid name collision
   with existing GitHub projects and to better reflect full SDLC scope
 
 ---
@@ -122,3 +122,23 @@ Full spec: docs/INITIALIZER.md
 - intent-validator, design-validator, artifact-validator
 
 **Next:** Layer 4 — Quality Gate Layer
+
+---
+
+## Final platform name: Gestalt
+
+Naming candidates considered: agentforge, cortex, singularity, gestalt
+
+**Selected: Gestalt**
+
+Rationale: "A whole that is more than the sum of its parts" — exactly what the
+platform does. Multiple specialised agents working together produce outcomes no
+single agent could. Distinctive, available, and intellectually honest about the
+system's philosophy.
+
+CLI: `gestalt init`, `gestalt run`, `gestalt status`, `gestalt deploy`
+
+Naming history:
+- Started as `openharness` → renamed to `agentforge-sdlc` → renamed to `gestalt`
+
+Repository: https://github.com/afarahat-lab/gestalt

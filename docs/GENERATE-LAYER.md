@@ -1,4 +1,4 @@
-# Generate Layer — AgentForge SDLC
+# Generate Layer — Gestalt
 
 Version: 0.1.0
 Layer: 3

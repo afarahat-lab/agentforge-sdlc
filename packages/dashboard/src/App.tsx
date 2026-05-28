@@ -1,5 +1,5 @@
 /**
- * AgentForge SDLC Dashboard — root component.
+ * Gestalt Dashboard — root component.
  *
  * Routing:
  *   /                → IntentFeed

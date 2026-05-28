@@ -1,10 +1,10 @@
 /**
- * @agentforge-sdlc/agents-deploy
+ * @gestalt/agents-deploy
  * All types for the merge and deploy layer.
  */
 
-import type { SignalType } from '@agentforge-sdlc/core';
-import type { GateResult } from '@agentforge-sdlc/agents-quality-gate';
+import type { SignalType } from '@gestalt/core';
+import type { GateResult } from '@gestalt/agents-quality-gate';
 
 // ─── Pipeline adapters ────────────────────────────────────────────────────────
 

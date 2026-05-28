@@ -1,4 +1,4 @@
-# @agentforge-sdlc/agents-deploy
+# @gestalt/agents-deploy
 
 The merge and deploy layer. Takes approved artifact sets from the quality gate and manages their promotion through environments.
 

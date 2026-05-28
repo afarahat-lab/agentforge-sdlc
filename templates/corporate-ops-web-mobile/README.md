@@ -1,6 +1,6 @@
 # Corporate Operations Web & Mobile — Tier 1 Template
 
-**Tier:** 1 (Standard Library — ships with AgentForge SDLC)
+**Tier:** 1 (Standard Library — ships with Gestalt)
 **Version:** 0.1.0
 **Type:** harness-template
 

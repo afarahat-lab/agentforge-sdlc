@@ -1,4 +1,4 @@
-# Harness Initializer — AgentForge SDLC
+# Harness Initializer — Gestalt
 
 Version: 0.1.0
 Layer: 2
@@ -8,8 +8,8 @@ Status: Designed, pending implementation
 
 ## Overview
 
-The harness initializer is the front door of AgentForge SDLC. When an operator runs
-`agentforge init` on a new project, the initializer guides them through a four-phase
+The harness initializer is the front door of Gestalt. When an operator runs
+`gestalt init` on a new project, the initializer guides them through a four-phase
 process that produces a fully populated, project-specific harness — ready for the
 generate layer to start working immediately.
 
@@ -27,9 +27,9 @@ The only phase that does not require an LLM. Collects provider configuration
 interactively so all subsequent phases can use the LLM.
 
 ```
-$ agentforge init
+$ gestalt init
 
-Welcome to AgentForge SDLC.
+Welcome to Gestalt.
 ──────────────────────────────────────────────────────
 Before we begin, we need to connect to your LLM provider.
 
@@ -179,7 +179,7 @@ Validating harness...
 ✓ Harness ready. Your project is set up.
 
 Next step:
-  agentforge run "Set up the project scaffold with initial module structure"
+  gestalt run "Set up the project scaffold with initial module structure"
 
 Dashboard: http://localhost:3000
 ──────────────────────────────────────────────────────
@@ -204,7 +204,7 @@ The harness is a living artifact — not a one-time scaffold.
 ## Implementation notes
 
 - Phase 0 is a pure CLI interaction — no server required
-- Phases 1–3 require the AgentForge server to be running (`docker-compose up -d` first)
+- Phases 1–3 require the Gestalt server to be running (`docker-compose up -d` first)
 - The LLM prompt for Phase 1 extraction is defined in `packages/agents/generate/src/initializer/extract-prompt.ts`
 - The harness generation prompt is in `packages/agents/generate/src/initializer/generate-prompt.ts`
 - Validation logic is in `packages/core/src/harness/validator.ts`

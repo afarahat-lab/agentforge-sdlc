@@ -1,1 +1,91 @@
-// @agentforge-sdlc/cli — implementation coming in Phase 2
+#!/usr/bin/env node
+/**
+ * gestalt CLI — entry point.
+ *
+ * Commands:
+ *   gestalt login [--server <url>]
+ *   gestalt init
+ *   gestalt run "<intent>" [--priority critical|high|normal|low]
+ *   gestalt status [--id <correlationId>]
+ *   gestalt logs [--follow] [--id <correlationId>]
+ *   gestalt dashboard
+ */
+
+import { program } from 'commander';
+import { loginCommand } from './commands/login';
+import { initCommand } from './commands/init';
+import { runCommand } from './commands/run';
+import { statusCommand } from './commands/status';
+import { logsCommand, dashboardCommand } from './commands/logs';
+
+const pkg = { version: '0.1.0' };  // replaced by package.json at build time
+
+program
+  .name('gestalt')
+  .description('Agent-first software development platform')
+  .version(pkg.version);
+
+// gestalt login
+program
+  .command('login')
+  .description('Sign in to the Gestalt server')
+  .option('--server <url>', 'Server URL', 'http://localhost:3000')
+  .action(async (opts: { server: string }) => {
+    await loginCommand(opts.server).catch(fatalError);
+  });
+
+// gestalt init
+program
+  .command('init')
+  .description('Initialize a new project with a generated harness')
+  .action(async () => {
+    await initCommand().catch(fatalError);
+  });
+
+// gestalt run
+program
+  .command('run <intent>')
+  .description('Submit an intent to the generate layer')
+  .option('--project <id>', 'Project ID (overrides current project)')
+  .option('--priority <level>', 'Task priority: critical|high|normal|low', 'normal')
+  .action(async (intent: string, opts: { project?: string; priority?: string }) => {
+    await runCommand(intent, {
+      projectId: opts.project,
+      priority: opts.priority as never,
+    }).catch(fatalError);
+  });
+
+// gestalt status
+program
+  .command('status')
+  .description('Show platform status and recent intents')
+  .option('--id <correlationId>', 'Show detail for a specific intent cycle')
+  .option('--watch', 'Refresh every 5 seconds')
+  .action(async (opts: { id?: string; watch?: boolean }) => {
+    await statusCommand(opts).catch(fatalError);
+  });
+
+// gestalt logs
+program
+  .command('logs')
+  .description('Stream platform execution logs')
+  .option('--follow', 'Keep streaming (default: true)', true)
+  .option('--id <correlationId>', 'Filter to a specific intent cycle')
+  .action(async (opts: { follow?: boolean; id?: string }) => {
+    await logsCommand({ follow: opts.follow, correlationId: opts.id }).catch(fatalError);
+  });
+
+// gestalt dashboard
+program
+  .command('dashboard')
+  .description('Open the oversight dashboard in your browser')
+  .action(async () => {
+    await dashboardCommand().catch(fatalError);
+  });
+
+program.parse();
+
+function fatalError(err: unknown): never {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+}

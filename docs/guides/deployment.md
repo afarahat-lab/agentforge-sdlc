@@ -1,6 +1,6 @@
-# Deployment Guide — AgentForge SDLC
+# Deployment Guide — Gestalt
 
-This guide is written for **corporate IT teams** deploying AgentForge SDLC in a
+This guide is written for **corporate IT teams** deploying Gestalt in a
 production enterprise environment.
 
 ---
@@ -60,11 +60,11 @@ Mirror the repository to your internal Git server first:
 
 ```bash
 # On a machine with internet access, create a bare clone
-git clone --bare https://github.com/afarahat-lab/agentforge-sdlc.git
+git clone --bare https://github.com/afarahat-lab/gestalt.git
 
 # Push to your internal Git server
-cd agentforge-sdlc.git
-git remote add internal https://git.company.com/devtools/agentforge-sdlc.git
+cd gestalt.git
+git remote add internal https://git.company.com/devtools/gestalt.git
 git push internal --all
 git push internal --tags
 ```
@@ -73,8 +73,8 @@ On the production server:
 
 ```bash
 # Clone from your internal mirror
-git clone https://git.company.com/devtools/agentforge-sdlc.git
-cd agentforge-sdlc
+git clone https://git.company.com/devtools/gestalt.git
+cd gestalt
 ```
 
 ---
@@ -127,7 +127,7 @@ cp .env.example .env
 | `LLM_MODEL` | Model name | `gpt-4o` |
 | `POSTGRES_PASSWORD` | Database password | Strong random string |
 | `JWT_SECRET` | JWT signing secret | 64+ character random string |
-| `SERVER_BASE_URL` | Public URL of the server | `https://agentforge.company.com` |
+| `SERVER_BASE_URL` | Public URL of the server | `https://gestalt.company.com` |
 
 ### Generate secure secrets
 
@@ -143,7 +143,7 @@ openssl rand -hex 32
 
 ## Step 5 — Configure database
 
-AgentForge SDLC uses PostgreSQL by default. To use your existing Oracle or
+Gestalt uses PostgreSQL by default. To use your existing Oracle or
 SQL Server instance, see the [Database Configuration Guide](../reference/database-config.md).
 
 **PostgreSQL (default — runs in Docker):**
@@ -156,7 +156,7 @@ a PostgreSQL container.
 ```bash
 # In .env
 DATABASE_ADAPTER=oracle
-DATABASE_URL=oracle://agentforge_user:password@oracle-server:1521/ORCL
+DATABASE_URL=oracle://gestalt_user:password@oracle-server:1521/ORCL
 ```
 
 See [Oracle Setup Guide](../reference/database-config.md#oracle) for user
@@ -178,7 +178,7 @@ docker-compose logs -f server
 
 The server is ready when logs show:
 ```
-AgentForge SDLC server started on port 3000
+Gestalt server started on port 3000
 Database connection established
 Redis connection established
 ```
@@ -205,14 +205,14 @@ Place a reverse proxy in front of the server for TLS termination and load balanc
 ```nginx
 server {
     listen 443 ssl;
-    server_name agentforge.company.com;
+    server_name gestalt.company.com;
 
-    ssl_certificate     /etc/ssl/certs/agentforge.crt;
-    ssl_certificate_key /etc/ssl/private/agentforge.key;
+    ssl_certificate     /etc/ssl/certs/gestalt.crt;
+    ssl_certificate_key /etc/ssl/private/gestalt.key;
 
     # Required for Kerberos authentication
     auth_gss on;
-    auth_gss_keytab /etc/krb5/agentforge.keytab;
+    auth_gss_keytab /etc/krb5/gestalt.keytab;
 
     location / {
         proxy_pass http://localhost:3000;
@@ -235,17 +235,17 @@ server {
 
 ```bash
 # Install CLI on the server
-npm install -g @agentforge-sdlc/cli
+npm install -g @gestalt/cli
 
 # Point CLI at the server
-export AGENTFORGE_SERVER=https://agentforge.company.com
+export AGENTFORGE_SERVER=https://gestalt.company.com
 
 # If using IdP: the first user who logs in via the IdP and has the
-# AgentForge-Admins group will automatically be an admin.
+# Gestalt-Admins group will automatically be an admin.
 # No manual creation needed.
 
 # If using local fallback (non-production only):
-agentforge admin create-user --email admin@company.com --role admin
+gestalt admin create-user --email admin@company.com --role admin
 ```
 
 ---
@@ -254,25 +254,25 @@ agentforge admin create-user --email admin@company.com --role admin
 
 ```bash
 # Health check
-curl https://agentforge.company.com/health
+curl https://gestalt.company.com/health
 # Expected: {"status":"ok","version":"0.1.0"}
 
 # Open dashboard
-# Navigate to: https://agentforge.company.com
+# Navigate to: https://gestalt.company.com
 ```
 
 ---
 
 ## Firewall rules summary
 
-**Inbound (to AgentForge server):**
+**Inbound (to Gestalt server):**
 
 | Port | Protocol | Source | Purpose |
 |---|---|---|---|
 | 443 | HTTPS | Corporate network | Dashboard and API |
 | 3000 | HTTP | Internal only | Direct access (if no reverse proxy) |
 
-**Outbound (from AgentForge server):**
+**Outbound (from Gestalt server):**
 
 | Destination | Port | Purpose |
 |---|---|---|
@@ -288,13 +288,13 @@ curl https://agentforge.company.com/health
 
 ```bash
 # Update to latest version
-cd agentforge-sdlc
+cd gestalt
 git pull origin main
 docker-compose pull
 docker-compose up -d --build
 
 # Backup database
-docker-compose exec postgres pg_dump -U agentforge agentforge > backup-$(date +%Y%m%d).sql
+docker-compose exec postgres pg_dump -U gestalt gestalt > backup-$(date +%Y%m%d).sql
 
 # View logs
 docker-compose logs -f server

@@ -3,7 +3,7 @@
  * Each signal type has a defined resolution path — never generic retry.
  */
 
-import type { AgentRole, SignalType } from '@agentforge-sdlc/core';
+import type { AgentRole, SignalType } from '@gestalt/core';
 import type { FeedbackSignal, GateFeedback } from '../types';
 
 export interface RoutedFeedback {

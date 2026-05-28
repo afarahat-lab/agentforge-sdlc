@@ -1,5 +1,5 @@
 /**
- * @agentforge-sdlc/dashboard
+ * @gestalt/dashboard
  * Public exports for the oversight dashboard.
  */
 

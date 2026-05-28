@@ -1,5 +1,5 @@
 /**
- * @agentforge-sdlc/dashboard
+ * @gestalt/dashboard
  * All types for the oversight dashboard.
  */
 

@@ -1,5 +1,5 @@
 /**
- * Typed HTTP client for the AgentForge SDLC server API.
+ * Typed HTTP client for the Gestalt server API.
  * All dashboard data access goes through this client — never raw fetch.
  *
  * Uses Server-Sent Events for live updates.

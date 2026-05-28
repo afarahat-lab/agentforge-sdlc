@@ -51,7 +51,7 @@ Array of auth providers in priority order. First matching provider handles the r
 {
   "type": "windows-kerberos",
   "enabled": true,
-  "spn": "HTTP/agentforge.company.com",
+  "spn": "HTTP/gestalt.company.com",
   "realm": "COMPANY.COM",
   "kdcHostname": "${KDC_HOSTNAME}"
 }
@@ -72,9 +72,9 @@ See [Kerberos Setup Guide](../guides/identity/kerberos.md) for full configuratio
   "type": "saml",
   "enabled": true,
   "entryPoint": "https://adfs.company.com/adfs/ls",
-  "issuer": "agentforge-sdlc",
-  "cert": "file:///etc/agentforge/certs/adfs-signing.pem",
-  "callbackUrl": "https://agentforge.company.com/auth/saml/callback"
+  "issuer": "gestalt",
+  "cert": "file:///etc/gestalt/certs/adfs-signing.pem",
+  "callbackUrl": "https://gestalt.company.com/auth/saml/callback"
 }
 ```
 
@@ -96,7 +96,7 @@ See [SAML/ADFS Setup Guide](../guides/identity/saml-adfs.md).
   "issuer": "https://login.microsoftonline.com/<TENANT_ID>/v2.0",
   "clientId": "${OIDC_CLIENT_ID}",
   "clientSecret": "${OIDC_CLIENT_SECRET}",
-  "callbackUrl": "https://agentforge.company.com/auth/oidc/callback",
+  "callbackUrl": "https://gestalt.company.com/auth/oidc/callback",
   "scopes": ["openid", "profile", "email", "groups"]
 }
 ```
@@ -133,9 +133,9 @@ Maps IdP group names to platform roles. First matching entry wins.
 
 ```json
 "roleMapping": [
-  { "idpGroup": "AgentForge-Admins",    "platformRole": "admin" },
-  { "idpGroup": "AgentForge-Operators", "platformRole": "operator" },
-  { "idpGroup": "AgentForge-Viewers",   "platformRole": "viewer" }
+  { "idpGroup": "Gestalt-Admins",    "platformRole": "admin" },
+  { "idpGroup": "Gestalt-Operators", "platformRole": "operator" },
+  { "idpGroup": "Gestalt-Viewers",   "platformRole": "viewer" }
 ]
 ```
 

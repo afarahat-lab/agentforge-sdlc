@@ -1,5 +1,5 @@
 /**
- * @agentforge-sdlc/registry
+ * @gestalt/registry
  * Public exports for the harness registry and ecosystem layer.
  */
 

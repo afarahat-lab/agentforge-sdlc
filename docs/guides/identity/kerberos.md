@@ -1,17 +1,17 @@
 # Windows Kerberos SSO — Identity Integration Guide
 
 This guide walks your IT team through configuring seamless Windows single
-sign-on for AgentForge SDLC. Once configured, domain-joined Windows users
+sign-on for Gestalt. Once configured, domain-joined Windows users
 open the dashboard and are authenticated automatically — no login screen.
 
-**Audience:** Active Directory administrator + AgentForge server administrator
+**Audience:** Active Directory administrator + Gestalt server administrator
 
 ---
 
 ## How it works
 
 ```
-1. User opens https://agentforge.company.com on a domain-joined Windows machine
+1. User opens https://gestalt.company.com on a domain-joined Windows machine
 2. Browser detects Negotiate authentication challenge from server
 3. Browser presents Kerberos ticket from the user's Windows login session
 4. Server validates the ticket against Active Directory
@@ -25,19 +25,19 @@ open the dashboard and are authenticated automatically — no login screen.
 ## Prerequisites
 
 - [ ] Active Directory domain functional level: Windows Server 2012 R2 or higher
-- [ ] AgentForge server is joined to the domain, OR has network access to the KDC
-- [ ] A dedicated service account in AD for AgentForge
-- [ ] DNS A record for the AgentForge server hostname
+- [ ] Gestalt server is joined to the domain, OR has network access to the KDC
+- [ ] A dedicated service account in AD for Gestalt
+- [ ] DNS A record for the Gestalt server hostname
 
 ---
 
 ## Step 1 — Create a service account in Active Directory
 
-Create a dedicated domain account for the AgentForge service.
+Create a dedicated domain account for the Gestalt service.
 **Do not use an existing account.**
 
 ```
-Account name: agentforgesvc
+Account name: gestaltsvc
 Password: <strong password, does not expire>
 Account type: Service account (no interactive login required)
 Password never expires: Yes
@@ -45,7 +45,7 @@ Password never expires: Yes
 
 In Active Directory Users and Computers:
 1. Right-click domain → New → User
-2. First name: AgentForge, Last name: Service, User logon name: `agentforgesvc`
+2. First name: Gestalt, Last name: Service, User logon name: `gestaltsvc`
 3. Set a strong password, check "Password never expires"
 4. Uncheck "User must change password at next logon"
 
@@ -59,21 +59,21 @@ Run on a domain controller (or any machine with AD admin rights):
 
 ```powershell
 # Replace values with your actual hostname and service account
-setspn -A HTTP/agentforge.company.com COMPANY\agentforgesvc
-setspn -A HTTP/agentforge COMPANY\agentforgesvc
+setspn -A HTTP/gestalt.company.com COMPANY\gestaltsvc
+setspn -A HTTP/gestalt COMPANY\gestaltsvc
 
 # Verify the SPN was registered
-setspn -L COMPANY\agentforgesvc
+setspn -L COMPANY\gestaltsvc
 # Expected output:
-# Registered ServicePrincipalNames for CN=AgentForge Service,...:
-#   HTTP/agentforge.company.com
-#   HTTP/agentforge
+# Registered ServicePrincipalNames for CN=Gestalt Service,...:
+#   HTTP/gestalt.company.com
+#   HTTP/gestalt
 ```
 
 **If the server uses a non-standard port (not 443):**
 
 ```powershell
-setspn -A HTTP/agentforge.company.com:8443 COMPANY\agentforgesvc
+setspn -A HTTP/gestalt.company.com:8443 COMPANY\gestaltsvc
 ```
 
 **Troubleshooting SPN registration:**
@@ -83,45 +83,45 @@ setspn -A HTTP/agentforge.company.com:8443 COMPANY\agentforgesvc
 setspn -X
 
 # If duplicate exists, delete and re-register
-setspn -D HTTP/agentforge.company.com COMPANY\agentforgesvc
-setspn -A HTTP/agentforge.company.com COMPANY\agentforgesvc
+setspn -D HTTP/gestalt.company.com COMPANY\gestaltsvc
+setspn -A HTTP/gestalt.company.com COMPANY\gestaltsvc
 ```
 
 ---
 
 ## Step 3 — Create a keytab file
 
-The keytab allows the AgentForge server to validate Kerberos tickets without
+The keytab allows the Gestalt server to validate Kerberos tickets without
 needing the service account password at runtime.
 
 Run on a domain controller:
 
 ```powershell
 # Windows Server 2012 R2 and later
-ktpass -princ HTTP/agentforge.company.com@COMPANY.COM `
-       -mapuser COMPANY\agentforgesvc `
+ktpass -princ HTTP/gestalt.company.com@COMPANY.COM `
+       -mapuser COMPANY\gestaltsvc `
        -crypto AES256-SHA1 `
        -ptype KRB5_NT_PRINCIPAL `
        -pass <service-account-password> `
-       -out agentforge.keytab
+       -out gestalt.keytab
 
 # Verify the keytab
-klist -k agentforge.keytab
+klist -k gestalt.keytab
 ```
 
-Copy `agentforge.keytab` to the AgentForge server:
+Copy `gestalt.keytab` to the Gestalt server:
 
 ```bash
-# On AgentForge server
-mkdir -p /etc/agentforge/krb5
+# On Gestalt server
+mkdir -p /etc/gestalt/krb5
 # Copy keytab file here — use scp or your organisation's secure file transfer
-chmod 600 /etc/agentforge/krb5/agentforge.keytab
-chown <agentforge-service-user>:root /etc/agentforge/krb5/agentforge.keytab
+chmod 600 /etc/gestalt/krb5/gestalt.keytab
+chown <gestalt-service-user>:root /etc/gestalt/krb5/gestalt.keytab
 ```
 
 ---
 
-## Step 4 — Configure Kerberos on the AgentForge server
+## Step 4 — Configure Kerberos on the Gestalt server
 
 Create `/etc/krb5.conf` on the server:
 
@@ -150,7 +150,7 @@ Test the Kerberos configuration:
 
 ```bash
 # Test ticket acquisition (should succeed without password prompt if on domain)
-kinit agentforgesvc@COMPANY.COM
+kinit gestaltsvc@COMPANY.COM
 
 # Verify
 klist
@@ -160,13 +160,13 @@ klist
 
 ## Step 5 — Configure LDAP for group lookup
 
-AgentForge needs to look up the user's AD group memberships to assign platform roles.
+Gestalt needs to look up the user's AD group memberships to assign platform roles.
 
 In `.env`:
 
 ```bash
 LDAP_URL=ldaps://dc01.company.com:636
-LDAP_BIND_DN=CN=agentforgesvc,OU=Service Accounts,DC=company,DC=com
+LDAP_BIND_DN=CN=gestaltsvc,OU=Service Accounts,DC=company,DC=com
 LDAP_BIND_PASSWORD=<service-account-password>
 LDAP_BASE_DN=DC=company,DC=com
 LDAP_USER_SEARCH_FILTER=(userPrincipalName={0})
@@ -179,23 +179,23 @@ Export the Active Directory root CA certificate and place it on the server:
 
 ```bash
 # Place AD CA certificate
-/etc/agentforge/certs/ad-ca.crt
+/etc/gestalt/certs/ad-ca.crt
 
 # In .env
-LDAP_CA_CERT_PATH=/etc/agentforge/certs/ad-ca.crt
+LDAP_CA_CERT_PATH=/etc/gestalt/certs/ad-ca.crt
 ```
 
 ---
 
 ## Step 6 — Create AD groups for role mapping
 
-Create three AD security groups for AgentForge access control:
+Create three AD security groups for Gestalt access control:
 
 | Group name | Platform role | Who should be a member |
 |---|---|---|
-| `AgentForge-Admins` | admin | Platform administrators |
-| `AgentForge-Operators` | operator | Developers who submit intents |
-| `AgentForge-Viewers` | viewer | Stakeholders who monitor progress |
+| `Gestalt-Admins` | admin | Platform administrators |
+| `Gestalt-Operators` | operator | Developers who submit intents |
+| `Gestalt-Viewers` | viewer | Stakeholders who monitor progress |
 
 In Active Directory Users and Computers:
 1. Create each group as a Security group in an appropriate OU
@@ -212,15 +212,15 @@ In Active Directory Users and Computers:
     {
       "type": "windows-kerberos",
       "enabled": true,
-      "spn": "HTTP/agentforge.company.com",
+      "spn": "HTTP/gestalt.company.com",
       "realm": "COMPANY.COM",
       "kdcHostname": "dc01.company.com"
     }
   ],
   "roleMapping": [
-    { "idpGroup": "AgentForge-Admins",    "platformRole": "admin" },
-    { "idpGroup": "AgentForge-Operators", "platformRole": "operator" },
-    { "idpGroup": "AgentForge-Viewers",   "platformRole": "viewer" }
+    { "idpGroup": "Gestalt-Admins",    "platformRole": "admin" },
+    { "idpGroup": "Gestalt-Operators", "platformRole": "operator" },
+    { "idpGroup": "Gestalt-Viewers",   "platformRole": "viewer" }
   ],
   "defaultRole": null,
   "sessionTtlMinutes": 480
@@ -236,7 +236,7 @@ Chrome and Edge on domain-joined Windows machines handle Kerberos automatically.
 For Firefox, users must configure trusted URIs once (or IT can deploy via Group Policy):
 
 ```
-about:config → network.negotiate-auth.trusted-uris → agentforge.company.com
+about:config → network.negotiate-auth.trusted-uris → gestalt.company.com
 ```
 
 **Group Policy deployment for Firefox:**
@@ -244,7 +244,7 @@ about:config → network.negotiate-auth.trusted-uris → agentforge.company.com
 ```
 User Configuration → Administrative Templates → Firefox → 
   → Authentication → Trusted URIs for Negotiate authentication
-  → Value: https://agentforge.company.com
+  → Value: https://gestalt.company.com
 ```
 
 ---
@@ -252,15 +252,15 @@ User Configuration → Administrative Templates → Firefox →
 ## Step 9 — Restart and test
 
 ```bash
-# Restart the AgentForge server
+# Restart the Gestalt server
 docker-compose restart server
 
 # Test Kerberos authentication
-curl -v --negotiate -u : https://agentforge.company.com/auth/me
+curl -v --negotiate -u : https://gestalt.company.com/auth/me
 # Expected: 200 response with user info
 
 # Test from a domain-joined Windows machine
-# Open https://agentforge.company.com in Chrome/Edge
+# Open https://gestalt.company.com in Chrome/Edge
 # Should load dashboard without any login prompt
 ```
 
@@ -272,7 +272,7 @@ curl -v --negotiate -u : https://agentforge.company.com/auth/me
 
 The SPN is not registered correctly. Verify with:
 ```powershell
-setspn -L COMPANY\agentforgesvc
+setspn -L COMPANY\gestaltsvc
 ```
 
 Ensure the SPN exactly matches the hostname in the browser URL.
@@ -286,8 +286,8 @@ In AD, check the account properties → Account tab → "This account supports A
 
 Check file permissions:
 ```bash
-ls -la /etc/agentforge/krb5/agentforge.keytab
-# Should be: -rw------- (600) owned by agentforge service user
+ls -la /etc/gestalt/krb5/gestalt.keytab
+# Should be: -rw------- (600) owned by gestalt service user
 ```
 
 **User authenticated but shows wrong role**
@@ -295,14 +295,14 @@ ls -la /etc/agentforge/krb5/agentforge.keytab
 Check group membership propagation (can take up to 15 minutes in AD).
 Verify LDAP group attribute lookup:
 ```bash
-agentforge debug ldap-groups --user user@company.com
+gestalt debug ldap-groups --user user@company.com
 ```
 
 **Browser shows login prompt instead of SSO**
 
 - Verify the user's machine is domain-joined: `whoami /fqdn`
 - Verify the URL is in the trusted sites zone (Internet Explorer / Edge settings)
-- Verify DNS resolves correctly: `nslookup agentforge.company.com`
+- Verify DNS resolves correctly: `nslookup gestalt.company.com`
 - Check Chrome flags: `chrome://net-internals/#auth`
 
 ---

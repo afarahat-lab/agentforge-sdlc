@@ -1,5 +1,5 @@
 /**
- * @agentforge-sdlc/agents-quality-gate
+ * @gestalt/agents-quality-gate
  * Public exports for the quality gate layer.
  */
 

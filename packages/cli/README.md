@@ -1,16 +1,16 @@
-# @agentforge-sdlc/cli
+# @gestalt/cli
 
-The developer-facing interface to AgentForge SDLC. Communicates with the server over HTTP. Developers interact with this daily; it should feel fast, clear, and informative.
+The developer-facing interface to Gestalt. Communicates with the server over HTTP. Developers interact with this daily; it should feel fast, clear, and informative.
 
 ---
 
 ## Responsibilities
 
-- agentforge init — four-phase harness initializer (LLM bootstrap → intent capture → generation → validation)
-- agentforge run '<intent>' — submit intent to the generate layer
-- agentforge status — view current agent activity and intent cycle state
-- agentforge logs — tail the execution log
-- agentforge dashboard — open the oversight dashboard in the browser
+- gestalt init — four-phase harness initializer (LLM bootstrap → intent capture → generation → validation)
+- gestalt run '<intent>' — submit intent to the generate layer
+- gestalt status — view current agent activity and intent cycle state
+- gestalt logs — tail the execution log
+- gestalt dashboard — open the oversight dashboard in the browser
 
 ## Key exports
 
@@ -32,11 +32,11 @@ src/
 ├── index.ts          # CLI entry point, command registration
 ├── types.ts          # CLI-specific types
 ├── commands/
-│   ├── init.ts       # agentforge init — four-phase initializer
-│   ├── run.ts        # agentforge run
-│   ├── status.ts     # agentforge status
-│   ├── logs.ts       # agentforge logs
-│   └── dashboard.ts  # agentforge dashboard
+│   ├── init.ts       # gestalt init — four-phase initializer
+│   ├── run.ts        # gestalt run
+│   ├── status.ts     # gestalt status
+│   ├── logs.ts       # gestalt logs
+│   └── dashboard.ts  # gestalt dashboard
 ├── api/
 │   └── client.ts     # typed HTTP client for the server API
 └── ui/

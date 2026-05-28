@@ -1,4 +1,4 @@
-# @agentforge-sdlc/adapter-oracle
+# @gestalt/adapter-oracle
 
 Oracle repository adapter. Implements the same repository interfaces as the postgres adapter. Idiomatic Oracle SQL — no lowest-common-denominator queries.
 

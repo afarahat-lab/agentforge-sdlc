@@ -1,4 +1,4 @@
-# @agentforge-sdlc/adapter-mssql
+# @gestalt/adapter-mssql
 
 SQL Server repository adapter. Implements the same repository interfaces as the postgres adapter. Idiomatic T-SQL — no lowest-common-denominator queries.
 

@@ -1,4 +1,4 @@
-# @agentforge-sdlc/agents-generate
+# @gestalt/agents-generate
 
 The generate layer. Translates human intent into a coherent, ordered set of software artifacts. Operates as a two-level system: an orchestrator that plans and coordinates, and specialist agents that each handle one artifact type.
 

@@ -1,1 +1,1 @@
-// @agentforge-sdlc/adapter-mssql — implementation coming in Phase 2
+// @gestalt/adapter-mssql — implementation coming in Phase 2

@@ -1,4 +1,4 @@
-# @agentforge-sdlc/agents-quality-gate
+# @gestalt/agents-quality-gate
 
 The quality gate layer. Never generates — only validates and signals. Enforces the harness by running the full validation suite against every artifact set produced by the generate layer.
 

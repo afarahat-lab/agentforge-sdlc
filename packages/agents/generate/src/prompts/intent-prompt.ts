@@ -18,7 +18,7 @@ export function buildIntentPrompt(
       ? `\n\nIMPORTANT: This is retry attempt ${attempt}. Your previous response could not be parsed as valid JSON or was missing required fields. Ensure your response is pure JSON with no markdown fences, no preamble, and no trailing text.\n`
       : '';
 
-  return `You are the intent agent in the AgentForge SDLC platform.
+  return `You are the intent agent in the Gestalt platform.
 Your job is to parse a human intent statement into a structured IntentSpec JSON object.
 
 ${retryGuidance}

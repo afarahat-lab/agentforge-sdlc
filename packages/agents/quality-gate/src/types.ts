@@ -1,10 +1,10 @@
 /**
- * @agentforge-sdlc/agents-quality-gate
+ * @gestalt/agents-quality-gate
  * All types for the quality gate layer.
  */
 
-import type { AgentRole, SignalType } from '@agentforge-sdlc/core';
-import type { OrchestratorState } from '@agentforge-sdlc/agents-generate';
+import type { AgentRole, SignalType } from '@gestalt/core';
+import type { OrchestratorState } from '@gestalt/agents-generate';
 
 // Gate agent roles
 export type GateAgentRole =

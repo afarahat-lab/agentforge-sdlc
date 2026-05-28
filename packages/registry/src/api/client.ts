@@ -1,14 +1,14 @@
 /**
  * Registry API client.
  *
- * Used by the CLI (agentforge init, agentforge registry search)
+ * Used by the CLI (gestalt init, gestalt registry search)
  * and by the harness initializer to find matching templates.
  *
- * The registry API is a remote service hosted by the AgentForge project.
+ * The registry API is a remote service hosted by the Gestalt project.
  * For air-gapped environments, operators configure a mirror URL
  * in HARNESS.json under registry.mirrorUrl.
  *
- * Default registry URL: https://registry.agentforge.dev (planned)
+ * Default registry URL: https://registry.gestalt.dev (planned)
  */
 
 import type {
@@ -19,7 +19,7 @@ import type {
 export class RegistryClient {
   private readonly baseUrl: string;
 
-  constructor(baseUrl = 'https://registry.agentforge.dev') {
+  constructor(baseUrl = 'https://registry.gestalt.dev') {
     this.baseUrl = baseUrl.replace(/\/$/, '');
   }
 

@@ -1,1 +1,1 @@
-// @agentforge-sdlc/adapter-mssql — types
+// @gestalt/adapter-mssql — types

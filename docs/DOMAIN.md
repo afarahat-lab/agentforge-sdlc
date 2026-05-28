@@ -1,13 +1,13 @@
-# Domain Model — AgentForge SDLC
+# Domain Model — Gestalt
 
-This document describes the core domain model of the AgentForge SDLC platform itself.
+This document describes the core domain model of the Gestalt platform itself.
 
 ---
 
 ## Core entities
 
 ### Project
-A software project managed by AgentForge SDLC. Has a harness, a git repository, and a set of environments.
+A software project managed by Gestalt. Has a harness, a git repository, and a set of environments.
 
 ```
 Project {

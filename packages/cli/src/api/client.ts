@@ -1,0 +1,221 @@
+/**
+ * Typed HTTP client for the Gestalt server API.
+ * All CLI commands communicate with the server through this client.
+ * Never calls the database or LLM providers directly.
+ */
+
+export interface ApiClientOptions {
+  serverUrl: string;
+  token?: string | null;
+}
+
+export interface IntentSummary {
+  id: string;
+  correlationId: string;
+  text: string;
+  status: string;
+  source: string;
+  priority: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface IntentDetail extends IntentSummary {
+  agentExecutions: AgentExecution[];
+  signals: SignalSummary[];
+}
+
+export interface AgentExecution {
+  id: string;
+  agentRole: string;
+  status: string;
+  durationMs: number | null;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface SignalSummary {
+  id: string;
+  type: string;
+  severity: string;
+  sourceAgent: string;
+  message: string;
+  autoResolvable: boolean;
+}
+
+export interface PlatformStatus {
+  activeAgents: number;
+  timestamp: string;
+}
+
+export interface SubmitIntentResponse {
+  data: IntentSummary;
+}
+
+export class GestaltApiClient {
+  private readonly baseUrl: string;
+  private token: string | null;
+
+  constructor(options: ApiClientOptions) {
+    this.baseUrl = options.serverUrl.replace(/\/$/, '');
+    this.token = options.token ?? null;
+  }
+
+  setToken(token: string): void {
+    this.token = token;
+  }
+
+  // ─── Auth ──────────────────────────────────────────────────────────────────
+
+  async login(email: string, password: string): Promise<{ token: string }> {
+    return this.post<{ token: string }>('/auth/login', { email, password });
+  }
+
+  async getMe(): Promise<{ id: string; email: string; role: string }> {
+    return this.get('/auth/me');
+  }
+
+  // ─── Health ────────────────────────────────────────────────────────────────
+
+  async health(): Promise<{ status: string; version: string }> {
+    return this.get('/health');
+  }
+
+  // ─── Intents ───────────────────────────────────────────────────────────────
+
+  async submitIntent(params: {
+    text: string;
+    projectId: string;
+    priority?: string;
+  }): Promise<SubmitIntentResponse> {
+    return this.post('/intents', params);
+  }
+
+  async getIntent(id: string): Promise<{ data: IntentDetail }> {
+    return this.get(`/intents/${id}`);
+  }
+
+  async listIntents(params: {
+    projectId: string;
+    status?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<{ data: IntentSummary[]; total: number }> {
+    return this.get('/intents', params as Record<string, unknown>);
+  }
+
+  async clarifyIntent(id: string, params: {
+    clarification: string;
+    ambiguityId: string;
+  }): Promise<void> {
+    await this.post(`/intents/${id}/clarify`, params);
+  }
+
+  // ─── Status ────────────────────────────────────────────────────────────────
+
+  async getStatus(): Promise<{ data: PlatformStatus }> {
+    return this.get('/status');
+  }
+
+  async getActiveAgents(): Promise<{ data: AgentExecution[] }> {
+    return this.get('/status/agents');
+  }
+
+  // ─── SSE stream ────────────────────────────────────────────────────────────
+
+  /**
+   * Opens a Server-Sent Events connection and yields events.
+   * Returns an async generator — use for..await to consume.
+   */
+  async *streamEvents(): AsyncGenerator<Record<string, unknown>> {
+    const url = `${this.baseUrl}/events?token=${encodeURIComponent(this.token ?? '')}`;
+    const { EventSource } = await import('eventsource');
+    const source = new EventSource(url);
+
+    try {
+      for await (const event of eventSourceToAsyncIterable(source)) {
+        yield event;
+      }
+    } finally {
+      source.close();
+    }
+  }
+
+  // ─── HTTP helpers ──────────────────────────────────────────────────────────
+
+  private async get<T = unknown>(path: string, params?: Record<string, unknown>): Promise<T> {
+    const url = new URL(`${this.baseUrl}${path}`);
+    if (params) {
+      Object.entries(params).forEach(([k, v]) => {
+        if (v !== undefined) url.searchParams.set(k, String(v));
+      });
+    }
+    const res = await fetch(url.toString(), { headers: this.authHeaders() });
+    if (!res.ok) throw new ApiClientError(res.status, await res.text());
+    return res.json() as Promise<T>;
+  }
+
+  private async post<T = unknown>(path: string, body: unknown): Promise<T> {
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method: 'POST',
+      headers: { ...this.authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new ApiClientError(res.status, await res.text());
+    return res.json() as Promise<T>;
+  }
+
+  private authHeaders(): Record<string, string> {
+    return this.token ? { Authorization: `Bearer ${this.token}` } : {};
+  }
+}
+
+export class ApiClientError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly body: string,
+  ) {
+    super(`API error ${status}: ${body}`);
+    this.name = 'ApiClientError';
+  }
+}
+
+// ─── SSE helper ───────────────────────────────────────────────────────────────
+
+function eventSourceToAsyncIterable(
+  source: InstanceType<Awaited<typeof import('eventsource')>['EventSource']>,
+): AsyncIterable<Record<string, unknown>> {
+  return {
+    [Symbol.asyncIterator]() {
+      const queue: Record<string, unknown>[] = [];
+      let resolve: (() => void) | null = null;
+      let done = false;
+
+      source.onmessage = (e: { data: string }) => {
+        try {
+          queue.push(JSON.parse(e.data) as Record<string, unknown>);
+          resolve?.();
+          resolve = null;
+        } catch { /* ignore malformed */ }
+      };
+
+      source.onerror = () => {
+        done = true;
+        resolve?.();
+        resolve = null;
+      };
+
+      return {
+        async next() {
+          if (queue.length > 0) {
+            return { value: queue.shift()!, done: false };
+          }
+          if (done) return { value: undefined as never, done: true };
+          await new Promise<void>((r) => { resolve = r; });
+          if (done) return { value: undefined as never, done: true };
+          return { value: queue.shift()!, done: false };
+        },
+      };
+    },
+  };
+}

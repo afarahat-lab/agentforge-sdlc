@@ -1,7 +1,7 @@
 # AGENTS.md — Corporate Operations Web & Mobile Template
 
 This file is the agent orientation document for projects using the
-AgentForge SDLC corporate operations web & mobile template.
+Gestalt corporate operations web & mobile template.
 
 Read this file before taking any action on this project.
 

@@ -1,9 +1,9 @@
 # Azure AD / Entra ID — Identity Integration Guide
 
-Configure AgentForge SDLC with Microsoft Azure Active Directory (now Entra ID)
+Configure Gestalt with Microsoft Azure Active Directory (now Entra ID)
 using OpenID Connect (OIDC).
 
-**Audience:** Azure AD administrator + AgentForge server administrator
+**Audience:** Azure AD administrator + Gestalt server administrator
 
 ---
 
@@ -21,9 +21,9 @@ using OpenID Connect (OIDC).
 2. Navigate to: **Azure Active Directory → App registrations → New registration**
 
 Fill in:
-- **Name:** `AgentForge SDLC`
+- **Name:** `Gestalt`
 - **Supported account types:** Accounts in this organizational directory only
-- **Redirect URI:** Web → `https://agentforge.company.com/auth/oidc/callback`
+- **Redirect URI:** Web → `https://gestalt.company.com/auth/oidc/callback`
 
 Click **Register**.
 
@@ -37,7 +37,7 @@ Note the following values (you will need them in Step 4):
 
 1. In the app registration, navigate to: **Certificates & secrets → Client secrets**
 2. Click **New client secret**
-3. Description: `AgentForge SDLC production`
+3. Description: `Gestalt production`
 4. Expiry: 24 months (set a calendar reminder to rotate)
 5. Copy the **Value** immediately — it is only shown once
 
@@ -76,9 +76,9 @@ You need the Object ID of each group you want to map to platform roles.
 
 ```powershell
 # Using Azure CLI
-az ad group show --group "AgentForge-Admins" --query id -o tsv
-az ad group show --group "AgentForge-Operators" --query id -o tsv
-az ad group show --group "AgentForge-Viewers" --query id -o tsv
+az ad group show --group "Gestalt-Admins" --query id -o tsv
+az ad group show --group "Gestalt-Operators" --query id -o tsv
+az ad group show --group "Gestalt-Viewers" --query id -o tsv
 ```
 
 Or in Azure Portal: **Azure AD → Groups → [group name] → Overview → Object ID**
@@ -96,7 +96,7 @@ Or in Azure Portal: **Azure AD → Groups → [group name] → Overview → Obje
       "issuer": "https://login.microsoftonline.com/<TENANT_ID>/v2.0",
       "clientId": "<APPLICATION_CLIENT_ID>",
       "clientSecret": "${OIDC_CLIENT_SECRET}",
-      "callbackUrl": "https://agentforge.company.com/auth/oidc/callback",
+      "callbackUrl": "https://gestalt.company.com/auth/oidc/callback",
       "scopes": ["openid", "profile", "email", "GroupMember.Read.All"]
     }
   ],
@@ -123,7 +123,7 @@ OIDC_CLIENT_SECRET=<your-client-secret-value>
 docker-compose restart server
 
 # Test OIDC redirect
-curl -I https://agentforge.company.com/auth/oidc/login
+curl -I https://gestalt.company.com/auth/oidc/login
 # Expected: 302 redirect to login.microsoftonline.com
 
 # Open in browser, sign in with Azure AD credentials
@@ -138,7 +138,7 @@ curl -I https://agentforge.company.com/auth/oidc/login
 
 The redirect URI in Azure AD does not match your server URL exactly.
 Check: **App registration → Authentication → Redirect URIs**
-Must match `https://agentforge.company.com/auth/oidc/callback` exactly.
+Must match `https://gestalt.company.com/auth/oidc/callback` exactly.
 
 **"User authenticated but no groups in token"**
 

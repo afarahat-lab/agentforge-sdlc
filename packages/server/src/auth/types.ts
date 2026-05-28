@@ -1,5 +1,5 @@
 /**
- * Identity and authentication types for AgentForge SDLC.
+ * Identity and authentication types for Gestalt.
  * Covers all three auth modes: Windows Kerberos, IdP (SAML/OIDC), and local fallback.
  */
 
@@ -14,7 +14,7 @@ export type UserRole = 'admin' | 'operator' | 'viewer';
 export interface WindowsKerberosConfig {
   type: 'windows-kerberos';
   enabled: boolean;
-  spn: string;            // Service Principal Name e.g. HTTP/agentforge.company.com
+  spn: string;            // Service Principal Name e.g. HTTP/gestalt.company.com
   realm: string;          // Kerberos realm e.g. COMPANY.COM
   kdcHostname: string;    // Key Distribution Center hostname
 }
@@ -25,7 +25,7 @@ export interface SamlConfig {
   entryPoint: string;     // IdP SSO URL
   issuer: string;         // SP entity ID (our identifier to the IdP)
   cert: string;           // IdP signing certificate (PEM)
-  callbackUrl: string;    // Our ACS URL e.g. https://agentforge.company.com/auth/saml/callback
+  callbackUrl: string;    // Our ACS URL e.g. https://gestalt.company.com/auth/saml/callback
 }
 
 export interface OidcConfig {

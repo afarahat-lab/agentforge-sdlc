@@ -1,5 +1,5 @@
 {
-  "name": "@agentforge-sdlc/adapter-postgres",
+  "name": "@gestalt/adapter-postgres",
   "version": "0.1.0",
   "private": true,
   "description": "PostgreSQL repository adapter (reference implementation)",
@@ -9,8 +9,16 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest run",
-    "lint": "eslint src/",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@gestalt/core": "workspace:*",
+    "postgres": "^3.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
   }
 }
