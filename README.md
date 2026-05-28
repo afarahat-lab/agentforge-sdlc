@@ -1,14 +1,56 @@
 # Gestalt
 
-An open-source, self-hosted agent-first platform that automates the full Software Development Lifecycle (SDLC) for corporate operations web and mobile applications.
+An open-source, self-hosted agent-first platform that automates the full Software
+Development Lifecycle for corporate operations web and mobile applications.
 
-Gestalt replaces manual development cycles with a closed-loop system of specialized AI agents — handling everything from design and code generation through quality enforcement, deployment, and continuous maintenance — while keeping humans in strategic control.
+Gestalt replaces manual development cycles with a closed-loop system of specialised
+AI agents — handling design, code generation, quality enforcement, deployment, and
+continuous maintenance — while keeping humans in strategic control.
+
+---
+
+## How to run
+
+### Quickest path — Docker
+
+```bash
+git clone https://github.com/afarahat-lab/gestalt.git
+cd gestalt
+cp .env.example .env        # fill in LLM_BASE_URL, LLM_API_KEY, LLM_MODEL,
+                            # POSTGRES_PASSWORD, JWT_SECRET, SERVER_BASE_URL
+docker-compose up -d
+npm install -g @gestalt/cli
+agentforge init local-admin # create first admin user
+open http://localhost:3000  # open dashboard
+```
+
+### Development mode (from source)
+
+```bash
+git clone https://github.com/afarahat-lab/gestalt.git
+cd gestalt
+pnpm install
+docker-compose up -d postgres redis   # infrastructure only
+
+# Terminal 1 — server
+cd packages/server && pnpm dev
+
+# Terminal 2 — dashboard
+cd packages/dashboard && pnpm dev     # http://localhost:5173
+
+# Terminal 3 — CLI
+npm install -g @gestalt/cli
+gestalt login
+```
+
+### Full guide
+
+See **[docs/guides/running.md](docs/guides/running.md)** for all three options,
+environment variable reference, common workflows, and troubleshooting.
 
 ---
 
 ## What it does
-
-Traditional SDLC requires humans at every stage: design, code, review, test, deploy, maintain. Gestalt restructures this so agents handle execution and humans handle intent and oversight.
 
 ```
 You write:   "Add a leave request approval workflow with manager and HR stages"
@@ -16,22 +58,20 @@ Agents do:   Design → Context → Code → Tests → Review → Deploy → Mai
 You see:     A dashboard showing every decision, signal, and outcome
 ```
 
----
+### SDLC coverage
 
-## SDLC coverage
-
-| SDLC Phase | Gestalt capability |
+| Phase | Gestalt capability |
 |---|---|
-| Requirements | Intent capture + design agent translates to structured spec |
+| Requirements | Intent capture → structured spec |
 | Architecture | Harness initializer generates architecture from project context |
-| Design | Design agent produces domain model, API contracts, component specs |
-| Development | Code agent generates application code within harness constraints |
-| Testing | Test agent generates and runs test cases from success criteria |
-| Code review | Constraint agent enforces architectural rules automatically |
-| Security | Security agent runs OWASP ruleset on every change |
-| Deployment | Deploy agent manages PR, CI/CD pipeline, and environment promotion |
-| Maintenance | Background agents handle doc drift, arch realignment, and GC |
-| Monitoring | Evaluation agents analyze runtime metrics and feed back to generate |
+| Design | Domain model, API contracts, component specs |
+| Development | TypeScript code within harness constraints |
+| Testing | Tests generated from success criteria |
+| Code review | Architectural constraint enforcement |
+| Security | OWASP ruleset on every change |
+| Deployment | PR, CI/CD pipeline, environment promotion |
+| Maintenance | Background agents — doc drift, arch realignment, GC |
+| Monitoring | Evaluation agents analyse metrics, queue fixes |
 
 ---
 
@@ -41,55 +81,19 @@ You see:     A dashboard showing every decision, signal, and outcome
 Human intent
      │
      ▼
-Generate layer        (design · context files · code · tests · linters)
+Generate layer        (design · context · code · tests)
      │
      ▼
-Quality gate layer    (architectural constraints · linting · tests · security)
+Quality gate layer    (constraints · lint · tests · security)
      │
      ▼
-Merge & deploy layer  (PR management · CI/CD · environment promotion)
+Merge & deploy layer  (PR · CI/CD · environment promotion)
      │
      ▼
-Maintenance layer     (doc drift · arch realignment · garbage collection)
+Maintenance layer     (drift · alignment · GC · evaluation)
      │
      ▼
-Evaluation layer      (metrics · degradation detection · feedback → generate)
-     │
-     ▼
-Human oversight       (dashboard · logs · alerts · intervention gates)
-```
-
-Full architecture documentation: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-
----
-
-## Getting started
-
-### Prerequisites
-
-- Docker and Docker Compose
-- Git
-- A configured LLM endpoint (Azure OpenAI, Ollama, vLLM, or compatible)
-
-### Install
-
-```bash
-git clone https://github.com/afarahat-lab/gestalt.git
-cd gestalt
-cp .env.example .env
-# Edit .env with your LLM endpoint, DB config, and auth settings
-docker-compose up -d
-gestalt init
-```
-
-### CLI usage
-
-```bash
-gestalt init              # initialize a new project — LLM-powered interview generates full harness
-gestalt run "<intent>"    # submit an intent to the generate layer
-gestalt status            # view current agent activity
-gestalt logs              # tail the execution log
-gestalt dashboard         # open the oversight dashboard
+Human oversight       (dashboard · alerts · intervention)
 ```
 
 ---
@@ -98,31 +102,40 @@ gestalt dashboard         # open the oversight dashboard
 
 ```
 gestalt/
-├── docs/                          # platform architecture and decisions
+├── packages/
+│   ├── core/              # harness engine, LLM, queue, repository
+│   ├── cli/               # gestalt CLI tool
+│   ├── server/            # Fastify server + auth + oversight API
+│   ├── dashboard/         # React oversight dashboard
+│   ├── agents/
+│   │   ├── generate/      # intent, design, context, code, test agents
+│   │   ├── quality-gate/  # lint, security, constraint, test-runner, review
+│   │   ├── deploy/        # PR, pipeline, promotion agents
+│   │   └── maintenance/   # drift, alignment, GC, evaluation agents
+│   └── adapters/
+│       ├── postgres/      # PostgreSQL adapter (default)
+│       ├── oracle/        # Oracle adapter
+│       └── mssql/         # SQL Server adapter
+├── templates/
+│   └── corporate-ops-web-mobile/   # Tier 1 standard library harness
+├── docs/
+│   ├── guides/
+│   │   ├── running.md              # ← HOW TO RUN (all three options)
+│   │   ├── quick-start.md          # Docker quick start
+│   │   ├── deployment.md           # Production install for corporate IT
+│   │   └── identity/               # IdP integration guides
+│   ├── reference/
+│   │   └── harness-config.md       # Complete HARNESS.json reference
+│   ├── runbooks/
+│   │   └── common-issues.md        # Troubleshooting
 │   ├── ARCHITECTURE.md
 │   ├── DECISIONS.md
 │   ├── DOMAIN.md
 │   └── GOLDEN_PRINCIPLES.md
-├── packages/
-│   ├── core/                      # core harness engine
-│   ├── cli/                       # gestalt CLI tool
-│   ├── server/                    # self-hosted server
-│   ├── dashboard/                 # React oversight dashboard
-│   ├── agents/
-│   │   ├── generate/              # generation agents (design, context, code, test)
-│   │   ├── quality-gate/          # quality enforcement agents
-│   │   ├── deploy/                # merge and deploy agents
-│   │   └── maintenance/           # background maintenance agents
-│   └── adapters/
-│       ├── postgres/              # PostgreSQL adapter (default)
-│       ├── oracle/                # Oracle adapter
-│       └── mssql/                 # SQL Server adapter
-├── templates/
-│   └── corporate-ops-web-mobile/  # Tier 1 standard library harness
-├── AGENTS.md                      # agent orientation for this repo
-├── HARNESS.json                   # machine-readable harness metadata
+├── AGENTS.md                       # Agent orientation for this repo
+├── HARNESS.json
 ├── docker-compose.yml
-└── package.json
+└── .env.example
 ```
 
 ---
@@ -133,55 +146,42 @@ gestalt/
 |---|---|
 | Runtime | Self-hosted server |
 | Developer interface | CLI (`gestalt` command) |
-| Agent model | Ephemeral workers |
-| Message queue | BullMQ (Redis-backed) |
-| Primary database | PostgreSQL (configurable) |
-| DB adapters | PostgreSQL · Oracle · SQL Server |
+| Agent model | Ephemeral workers (BullMQ) |
+| Primary database | PostgreSQL (Oracle + SQL Server adapters available) |
 | LLM provider | Configurable (Azure OpenAI · Ollama · vLLM) |
-| Frontend | React |
-| Backend | Node.js / TypeScript |
-| Target domain | Corporate operations web and mobile |
-
-Full decision log: [docs/DECISIONS.md](docs/DECISIONS.md)
+| Authentication | Windows Kerberos · SAML · OIDC · local fallback |
+| Frontend | React 18 + Vite |
+| Backend | Node.js 20 / TypeScript / Fastify |
 
 ---
 
-## Harness registry tiers
+## Documentation
 
-- **Tier 1 — Standard library**: ships with the framework, curated by maintainers
+| Guide | Audience |
+|---|---|
+| [How to run](docs/guides/running.md) | Everyone — all three run options |
+| [Quick start](docs/guides/quick-start.md) | End users — Docker in 10 minutes |
+| [Deployment guide](docs/guides/deployment.md) | Corporate IT — production install |
+| [Identity integration](docs/guides/identity/overview.md) | IT admins — Kerberos, SAML, Azure AD |
+| [HARNESS.json reference](docs/reference/harness-config.md) | Operators — full config reference |
+| [Operations runbook](docs/runbooks/common-issues.md) | Operators — troubleshooting |
+| [Architecture](docs/ARCHITECTURE.md) | Contributors — system design |
+| [Architecture decisions](docs/DECISIONS.md) | Contributors — all ADRs |
+
+---
+
+## Contributing
+
+Gestalt uses a three-tier harness registry:
+
+- **Tier 1 — Standard library**: ships with the platform, curated by maintainers
 - **Tier 2 — Verified registry**: community-contributed, reviewed and badged
 - **Tier 3 — Community registry**: open contributions, experimental
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for how to contribute harness patterns and adapters.
+See the registry documentation for contributing harness patterns and adapters.
 
 ---
 
 ## License
 
 MIT
-
----
-
-## Documentation
-
-### Getting started
-- [Quick Start](docs/guides/quick-start.md) — running in under 10 minutes
-- [Deployment Guide](docs/guides/deployment.md) — production install for corporate IT
-
-### Identity integration
-- [Overview](docs/guides/identity/overview.md) — choose your integration method
-- [Windows Kerberos SSO](docs/guides/identity/kerberos.md) — seamless Windows domain login
-- [SAML 2.0 / ADFS](docs/guides/identity/saml-adfs.md) — Active Directory Federation Services
-- [Azure AD / Entra ID](docs/guides/identity/azure-ad.md) — Microsoft Azure Active Directory
-
-### Reference
-- [HARNESS.json Configuration](docs/reference/harness-config.md) — complete config reference
-
-### Operations
-- [Common Issues Runbook](docs/runbooks/common-issues.md) — troubleshooting guide
-
-### Architecture
-- [Architecture](docs/ARCHITECTURE.md) — system design
-- [Architecture Decisions](docs/DECISIONS.md) — all ADRs
-- [Domain Model](docs/DOMAIN.md) — platform entities
-- [Golden Principles](docs/GOLDEN_PRINCIPLES.md) — non-negotiable invariants
