@@ -1,332 +1,243 @@
-# Running Gestalt
+# Development Setup — Gestalt
 
-This guide covers all three ways to run the platform depending on your goal.
+This guide covers running Gestalt from source for active development and contribution.
 
----
-
-## Option 1 — Docker (recommended for end users and evaluators)
-
-The fastest way to get a running platform. No Node.js required.
-
-### Prerequisites
-
-- Docker Engine 24.0+
-- Docker Compose 2.20+
-- Git
-
-### Steps
-
-```bash
-# 1. Clone
-git clone https://github.com/afarahat-lab/gestalt.git
-cd gestalt
-
-# 2. Configure environment
-cp .env.example .env
-```
-
-Open `.env` and fill in the required values:
-
-```bash
-# Your LLM provider (choose one):
-
-# Azure OpenAI
-LLM_BASE_URL=https://<resource>.openai.azure.com/openai/deployments/<deployment>
-LLM_API_KEY=<your-api-key>
-LLM_MODEL=gpt-4o
-
-# Ollama (local — no API key needed)
-LLM_BASE_URL=http://host.docker.internal:11434/v1
-LLM_API_KEY=ollama
-LLM_MODEL=llama3
-
-# Required — change these
-POSTGRES_PASSWORD=choose-a-strong-password
-JWT_SECRET=choose-a-64-character-random-string
-SERVER_BASE_URL=http://localhost:3000
-```
-
-```bash
-# 3. Start all services
-docker-compose up -d
-
-# 4. Verify all three containers are healthy
-docker-compose ps
-# agentforge-server    running (healthy)
-# agentforge-postgres  running (healthy)
-# agentforge-redis     running (healthy)
-
-# 5. Install the CLI
-npm install -g @gestalt/cli
-
-# 6. Create your first admin user
-agentforge init local-admin
-
-# 7. Open the dashboard
-open http://localhost:3000
-# Or run: agentforge dashboard
-```
-
-### Verify it's working
-
-```bash
-# Health check
-curl http://localhost:3000/health
-# Expected: {"status":"ok","version":"0.1.0"}
-
-# CLI status
-agentforge status
-```
-
-### Stop
-
-```bash
-docker-compose down        # stop (keeps data)
-docker-compose down -v     # stop and delete all data
-```
+For the Docker-based quick start, see [Quick Start](./quick-start.md).
+For production corporate deployment, see [Deployment Guide](./deployment.md).
 
 ---
 
-## Option 2 — Development mode (for contributors and active development)
+## Prerequisites
 
-Runs each package in watch mode so changes reload instantly.
+| Requirement | Version | Notes |
+|---|---|---|
+| Node.js | 20+ | |
+| pnpm | 9+ | `npm install -g pnpm` |
+| Docker | 24.0+ | For PostgreSQL and Redis only |
+| Docker Compose | 2.20+ | |
+| Git | 2.38+ | |
 
-### Prerequisites
+---
 
-- Node.js 20+
-- pnpm 9+ (`npm install -g pnpm`)
-- Docker (for PostgreSQL and Redis)
-
-### Steps
+## Step 1 — Clone and install dependencies
 
 ```bash
-# 1. Clone and install
 git clone https://github.com/afarahat-lab/gestalt.git
 cd gestalt
 pnpm install
+```
 
-# 2. Start infrastructure (PostgreSQL + Redis only)
+---
+
+## Step 2 — Start infrastructure
+
+Start only PostgreSQL and Redis. The server and dashboard run as Node.js processes.
+
+```bash
 docker-compose up -d postgres redis
 
-# 3. Configure environment
-cp .env.example .env
-# Fill in LLM_BASE_URL, LLM_API_KEY, LLM_MODEL, POSTGRES_PASSWORD, JWT_SECRET
-# DATABASE_URL will be: postgresql://gestalt:<POSTGRES_PASSWORD>@localhost:5432/gestalt
-# Add: DATABASE_URL=postgresql://gestalt:<your-password>@localhost:5432/gestalt
+# Verify both are healthy
+docker-compose ps postgres redis
+```
 
-# 4. Build core packages (required before running)
+---
+
+## Step 3 — Configure environment
+
+```bash
+cp .env.example .env
+```
+
+For development, add these values to `.env`:
+
+```bash
+# Required
+LLM_BASE_URL=<your-llm-endpoint>
+LLM_API_KEY=<your-api-key>
+LLM_MODEL=gpt-4o
+JWT_SECRET=<64-character-random-string>
+
+# Database (constructed from docker-compose defaults)
+DATABASE_URL=postgresql://gestalt:<POSTGRES_PASSWORD>@localhost:5432/gestalt
+POSTGRES_PASSWORD=<same-password-as-above>
+
+# Optional
+NODE_ENV=development
+LOG_LEVEL=debug
+```
+
+Generate a secure JWT secret:
+
+```bash
+openssl rand -hex 64
+```
+
+---
+
+## Step 4 — Build core packages
+
+The server depends on compiled core packages. Build them once before starting:
+
+```bash
 pnpm --filter @gestalt/core build
 pnpm --filter @gestalt/adapter-postgres build
+```
 
-# 5. Start the server (terminal 1)
+---
+
+## Step 5 — Run in development mode
+
+Open three terminals from the repo root.
+
+**Terminal 1 — Server** (hot-reloads on file changes):
+
+```bash
 cd packages/server
 pnpm dev
-# Server running on http://localhost:3000
+# → Server running on http://localhost:3000
+```
 
-# 6. Start the dashboard (terminal 2)
+**Terminal 2 — Dashboard** (Vite HMR, proxies API to :3000):
+
+```bash
 cd packages/dashboard
 pnpm dev
-# Dashboard dev server on http://localhost:5173 (proxies API to :3000)
+# → Dashboard on http://localhost:5173
+```
 
-# 7. Use the CLI (terminal 3)
+**Terminal 3 — CLI:**
+
+```bash
+# Option A: run directly without building
 cd packages/cli
 pnpm dev -- login
-# Or build and use globally:
+
+# Option B: build and link globally
+cd packages/cli
 pnpm build
 npm link
 gestalt login
 ```
 
-### Watch mode for all packages simultaneously
+---
+
+## Running all packages simultaneously
+
+From the repo root:
 
 ```bash
-# From repo root — starts all packages in watch mode
 pnpm dev
 ```
 
-### Run tests
+This starts server, dashboard, and all packages in watch mode in parallel.
+
+---
+
+## Common commands
 
 ```bash
-# All packages
+# Type check all packages
+pnpm typecheck
+
+# Run all tests
 pnpm test
 
-# Specific package
+# Test a specific package
 pnpm --filter @gestalt/core test
 pnpm --filter @gestalt/agents-generate test
 
-# Watch mode
+# Test in watch mode
 pnpm --filter @gestalt/core test -- --watch
-```
 
-### Type check all packages
+# Lint all packages
+pnpm lint
 
-```bash
-pnpm typecheck
-```
-
-### Build all packages for production
-
-```bash
+# Build all packages for production
 pnpm build
-# Outputs: packages/*/dist/
-# Dashboard: packages/dashboard/dist/
+# Outputs: packages/*/dist/, packages/dashboard/dist/
+
+# Clean all build outputs
+pnpm clean
 ```
 
 ---
 
-## Option 3 — CLI only (connect to existing server)
+## Package dependency order
 
-If a Gestalt server is already running in your organisation, install only the CLI.
+When making changes, rebuild in this order if needed:
+
+```
+@gestalt/core
+  └── @gestalt/adapter-postgres
+        └── @gestalt/server
+              └── @gestalt/cli
+
+@gestalt/core
+  └── @gestalt/agents-generate
+  └── @gestalt/agents-quality-gate
+  └── @gestalt/agents-deploy
+  └── @gestalt/agents-maintenance
+```
+
+The dashboard has no internal package dependencies — it communicates only via the server API.
+
+---
+
+## First run after setup
 
 ```bash
-# Install CLI globally
-npm install -g @gestalt/cli
-
-# Point at your server
-gestalt login --server https://gestalt.company.com
+# Create admin user (local auth, development only)
+gestalt init local-admin
 
 # Initialise a project
 gestalt init
 
-# Submit an intent
-gestalt run "Add a leave request approval workflow"
+# Submit your first intent
+gestalt run "Set up the initial project scaffold"
 
-# Watch agent progress
-gestalt status
-```
-
----
-
-## Common workflows
-
-### Submit your first intent
-
-```bash
-# After login and init:
-gestalt run "Set up the initial project scaffold with folder structure"
-
-# Watch live agent activity
+# Watch live activity
 gestalt logs
 
-# Check status
-gestalt status
-
-# Open dashboard for full detail
-gestalt dashboard
+# Open dashboard
+gestalt dashboard   # opens http://localhost:5173 in dev mode
 ```
-
-### View intent detail
-
-```bash
-# From CLI
-gestalt status --id <correlationId>
-
-# From dashboard
-# Navigate to: http://localhost:3000 → click any intent
-```
-
-### Provide clarification when agents ask
-
-When an intent is ambiguous, the platform pauses and waits.
-
-```bash
-# CLI shows: "Status: ? needs clarification"
-# Open the dashboard → Alerts view → provide clarification
-# Or via CLI:
-gestalt status --id <correlationId>
-# Follow the prompt to enter clarification
-```
-
-### Trigger a maintenance run manually
-
-```bash
-# From dashboard: Maintenance → "run now" button next to any agent
-
-# From CLI (admin required):
-# gestalt maintenance trigger --agent drift-agent
-```
-
----
-
-## Environment variables reference
-
-| Variable | Required | Description |
-|---|---|---|
-| `LLM_BASE_URL` | Yes | LLM provider endpoint |
-| `LLM_API_KEY` | Yes | LLM API key |
-| `LLM_MODEL` | Yes | Model name (e.g. `gpt-4o`, `llama3`) |
-| `POSTGRES_PASSWORD` | Yes | PostgreSQL password |
-| `JWT_SECRET` | Yes | JWT signing secret (64+ random chars) |
-| `SERVER_BASE_URL` | Yes | Public URL of the server |
-| `DATABASE_URL` | Dev only | Full Postgres connection string |
-| `REDIS_URL` | No | Redis URL (default: `redis://localhost:6379`) |
-| `SERVER_PORT` | No | Server port (default: `3000`) |
-| `NODE_ENV` | No | `development` or `production` |
-| `LOG_LEVEL` | No | `debug`, `info`, `warn`, `error` (default: `info`) |
-| `LLM_TIMEOUT_MS` | No | LLM request timeout (default: `120000`) |
-| `SESSION_TTL_MINUTES` | No | JWT session duration (default: `480`) |
 
 ---
 
 ## Troubleshooting
 
-### Server won't start — missing environment variables
+**`Cannot find module '@gestalt/core'`**
 
-```
-GestaltConfigError: Missing required environment variables:
-  - LLM_BASE_URL
-  - JWT_SECRET
-```
-
-Copy `.env.example` to `.env` and fill in all required values.
-
-### Cannot connect to LLM
+Core packages need to be built first:
 
 ```bash
-# Test from the container
-docker-compose exec server curl -I $LLM_BASE_URL
-# If connection refused: check LLM_BASE_URL in .env
-# If 401: check LLM_API_KEY
-# If timeout: check firewall / proxy settings
+pnpm --filter @gestalt/core build
+pnpm --filter @gestalt/adapter-postgres build
 ```
 
-### Database migration fails
+**Database connection refused**
 
 ```bash
-# Check PostgreSQL is running and healthy
+# Check PostgreSQL is running
 docker-compose ps postgres
 
-# Check credentials
-docker-compose logs postgres | grep "error"
-
-# If password mismatch after changing .env, destroy and recreate volume
-docker-compose down -v
-docker-compose up -d
+# Check DATABASE_URL matches your POSTGRES_PASSWORD in .env
+echo $DATABASE_URL
 ```
 
-### CLI: "Not authenticated"
+**Port 3000 already in use**
 
 ```bash
-gestalt login --server http://localhost:3000
+# Find and stop the conflicting process
+lsof -ti:3000 | xargs kill
+# Or change the port in .env: SERVER_PORT=3001
 ```
 
-### Dashboard blank / not loading
+**LLM connection failures in dev**
 
-```bash
-# Check server is running
-curl http://localhost:3000/health
+The server logs will show the full error. Common causes:
+- `LLM_BASE_URL` not set or wrong format
+- API key expired or incorrect
+- Corporate proxy blocking outbound requests — set `HTTP_PROXY` in `.env`
 
-# In dev mode: ensure dashboard dev server is proxying correctly
-# vite.config.ts proxy should point to http://localhost:3000
-```
-
-For more issues: [Operations Runbook](./runbooks/common-issues.md)
-
----
-
-## Related guides
-
-- [Quick Start](./quick-start.md) — 10-minute Docker setup
-- [Deployment Guide](./deployment.md) — production corporate installation
-- [Identity Integration](./identity/overview.md) — connect to your corporate IdP
-- [Configuration Reference](../reference/harness-config.md) — all HARNESS.json options
+For all other issues: [Operations Runbook](../runbooks/common-issues.md)

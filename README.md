@@ -1,52 +1,8 @@
 # Gestalt
 
-An open-source, self-hosted agent-first platform that automates the full Software
-Development Lifecycle for corporate operations web and mobile applications.
+An open-source, self-hosted agent-first platform that automates the full Software Development Lifecycle for corporate operations web and mobile applications.
 
-Gestalt replaces manual development cycles with a closed-loop system of specialised
-AI agents — handling design, code generation, quality enforcement, deployment, and
-continuous maintenance — while keeping humans in strategic control.
-
----
-
-## How to run
-
-### Quickest path — Docker
-
-```bash
-git clone https://github.com/afarahat-lab/gestalt.git
-cd gestalt
-cp .env.example .env        # fill in LLM_BASE_URL, LLM_API_KEY, LLM_MODEL,
-                            # POSTGRES_PASSWORD, JWT_SECRET, SERVER_BASE_URL
-docker-compose up -d
-npm install -g @gestalt/cli
-agentforge init local-admin # create first admin user
-open http://localhost:3000  # open dashboard
-```
-
-### Development mode (from source)
-
-```bash
-git clone https://github.com/afarahat-lab/gestalt.git
-cd gestalt
-pnpm install
-docker-compose up -d postgres redis   # infrastructure only
-
-# Terminal 1 — server
-cd packages/server && pnpm dev
-
-# Terminal 2 — dashboard
-cd packages/dashboard && pnpm dev     # http://localhost:5173
-
-# Terminal 3 — CLI
-npm install -g @gestalt/cli
-gestalt login
-```
-
-### Full guide
-
-See **[docs/guides/running.md](docs/guides/running.md)** for all three options,
-environment variable reference, common workflows, and troubleshooting.
+Gestalt replaces manual development cycles with a closed-loop system of specialised AI agents — handling design, code generation, quality enforcement, deployment, and continuous maintenance — while keeping humans in strategic control.
 
 ---
 
@@ -72,6 +28,22 @@ You see:     A dashboard showing every decision, signal, and outcome
 | Deployment | PR, CI/CD pipeline, environment promotion |
 | Maintenance | Background agents — doc drift, arch realignment, GC |
 | Monitoring | Evaluation agents analyse metrics, queue fixes |
+
+---
+
+## Getting started
+
+```bash
+git clone https://github.com/afarahat-lab/gestalt.git
+cd gestalt
+cp .env.example .env   # fill in LLM and database credentials
+docker-compose up -d
+npm install -g @gestalt/cli
+gestalt init local-admin
+open http://localhost:3000
+```
+
+See **[docs/guides/quick-start.md](docs/guides/quick-start.md)** for the full step-by-step walkthrough including LLM provider options, health checks, and first intent submission.
 
 ---
 
@@ -119,20 +91,11 @@ gestalt/
 ├── templates/
 │   └── corporate-ops-web-mobile/   # Tier 1 standard library harness
 ├── docs/
-│   ├── guides/
-│   │   ├── running.md              # ← HOW TO RUN (all three options)
-│   │   ├── quick-start.md          # Docker quick start
-│   │   ├── deployment.md           # Production install for corporate IT
-│   │   └── identity/               # IdP integration guides
-│   ├── reference/
-│   │   └── harness-config.md       # Complete HARNESS.json reference
-│   ├── runbooks/
-│   │   └── common-issues.md        # Troubleshooting
-│   ├── ARCHITECTURE.md
-│   ├── DECISIONS.md
-│   ├── DOMAIN.md
-│   └── GOLDEN_PRINCIPLES.md
-├── AGENTS.md                       # Agent orientation for this repo
+│   ├── guides/            # how-to guides by audience
+│   ├── reference/         # configuration reference
+│   ├── runbooks/          # operations and troubleshooting
+│   └── ARCHITECTURE.md
+├── AGENTS.md              # agent orientation for this repo
 ├── HARNESS.json
 ├── docker-compose.yml
 └── .env.example
@@ -146,10 +109,10 @@ gestalt/
 |---|---|
 | Runtime | Self-hosted server |
 | Developer interface | CLI (`gestalt` command) |
-| Agent model | Ephemeral workers (BullMQ) |
-| Primary database | PostgreSQL (Oracle + SQL Server adapters available) |
-| LLM provider | Configurable (Azure OpenAI · Ollama · vLLM) |
-| Authentication | Windows Kerberos · SAML · OIDC · local fallback |
+| Agent model | Ephemeral workers (BullMQ + Redis) |
+| Primary database | PostgreSQL — Oracle and SQL Server adapters available |
+| LLM provider | Configurable: Azure OpenAI · Ollama · vLLM |
+| Authentication | Windows Kerberos · SAML 2.0 · OIDC · local fallback |
 | Frontend | React 18 + Vite |
 | Backend | Node.js 20 / TypeScript / Fastify |
 
@@ -159,8 +122,8 @@ gestalt/
 
 | Guide | Audience |
 |---|---|
-| [How to run](docs/guides/running.md) | Everyone — all three run options |
-| [Quick start](docs/guides/quick-start.md) | End users — Docker in 10 minutes |
+| [Quick start](docs/guides/quick-start.md) | First-time users — Docker in 10 minutes |
+| [Development setup](docs/guides/running.md) | Contributors — running from source |
 | [Deployment guide](docs/guides/deployment.md) | Corporate IT — production install |
 | [Identity integration](docs/guides/identity/overview.md) | IT admins — Kerberos, SAML, Azure AD |
 | [HARNESS.json reference](docs/reference/harness-config.md) | Operators — full config reference |
