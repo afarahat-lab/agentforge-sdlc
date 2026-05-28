@@ -65,4 +65,10 @@ export class PostgresUserRepository implements UserRepository {
       SELECT * FROM users ORDER BY created_at DESC
     `;
   }
+
+  async count(): Promise<number> {
+    const db = getDb();
+    const [row] = await db<[{ count: string }]>`SELECT COUNT(*)::text AS count FROM users`;
+    return parseInt(row.count, 10);
+  }
 }

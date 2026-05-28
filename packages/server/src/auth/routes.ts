@@ -18,14 +18,18 @@
  */
 
 import type { FastifyInstance } from 'fastify';
-import type { AuthManager } from './auth-manager';
+import { getRepositories, createContextLogger } from '@gestalt/core';
+import { AuthenticationError, type AuthManager } from './auth-manager';
+import type { IncomingRequest, OutgoingResponse, PlatformUser } from './types';
+
+const log = createContextLogger({ module: 'auth:routes' });
 
 /**
  * Registers all auth routes on the Fastify instance.
  */
 export async function registerAuthRoutes(
   app: FastifyInstance,
-  _authManager: AuthManager,
+  authManager: AuthManager,
 ): Promise<void> {
 
   // SAML flow
@@ -60,14 +64,58 @@ export async function registerAuthRoutes(
   // Local fallback login
   app.post<{ Body: { email: string; password: string } }>(
     '/auth/login',
-    async (_req, _reply) => {
-      throw new Error('POST /auth/login not yet implemented');
-      // Phase 2:
-      // 1. Check NODE_ENV — if production and !allowedInProduction, reject with 403
-      // 2. Look up user by email
-      // 3. bcrypt.compare(password, user.passwordHash)
-      // 4. Issue JWT
-      // 5. Return { token, user }
+    async (request, reply) => {
+      const { email, password } = request.body ?? ({} as { email?: string; password?: string });
+      if (!email || !password) {
+        return reply.code(400).send({ error: 'email and password are required' });
+      }
+
+      const incoming: IncomingRequest = {
+        headers: request.headers as Record<string, string | string[] | undefined>,
+        query: request.query as Record<string, string | undefined>,
+        body: request.body,
+        url: request.url,
+        method: request.method,
+      };
+      // Local login never redirects or sets cookies; supply a no-op response.
+      const outgoing: OutgoingResponse = {
+        redirect: () => undefined,
+        setCookie: () => undefined,
+      };
+
+      try {
+        const { users } = getRepositories();
+        const token = await authManager.authenticate(
+          incoming,
+          outgoing,
+          async (u) => users.upsert(u) as Promise<PlatformUser>,
+        );
+
+        if (!token) {
+          return reply.code(401).send({ error: 'No authentication provider could handle this request' });
+        }
+
+        // Return the freshly-issued token plus a small user summary so the
+        // CLI/dashboard can render the signed-in state without a follow-up call.
+        const credentialOwner = await users.findByIdpSubject(email.trim().toLowerCase(), 'local');
+        return reply.send({
+          token,
+          user: credentialOwner && {
+            id: credentialOwner.id,
+            email: credentialOwner.email,
+            displayName: credentialOwner.displayName,
+            role: credentialOwner.role,
+            authProvider: credentialOwner.authProvider,
+          },
+        });
+      } catch (err) {
+        if (err instanceof AuthenticationError) {
+          const status = err.code === 'LOCAL_IN_PRODUCTION' ? 403 : 401;
+          return reply.code(status).send({ error: err.message, code: err.code });
+        }
+        log.error({ err }, 'Unexpected error during local login');
+        return reply.code(500).send({ error: 'Authentication failed' });
+      }
     },
   );
 

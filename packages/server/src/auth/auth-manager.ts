@@ -19,8 +19,9 @@
 
 import type {
   AuthProvider, IdentityConfig,
-  PlatformUser, VerifiedIdentity, IncomingRequest, OutgoingResponse,
+  PlatformUser, UserRole, VerifiedIdentity, IncomingRequest, OutgoingResponse,
 } from './types';
+import { getRepositories } from '@gestalt/core';
 import { resolveRole, isDenied } from './role-mapper';
 import { issueToken } from './session';
 import type { SessionConfig } from './session';
@@ -65,25 +66,40 @@ export class AuthManager {
   /**
    * Creates a platform session from a verified identity.
    * Resolves role, upserts the shadow user record, issues JWT.
+   *
+   * For local-provider identities the existing user's role is preserved
+   * (the admin role granted at first-boot setup must survive subsequent
+   * logins). IdP-provided identities have their role re-evaluated from
+   * groups on every login.
    */
   private async createSession(
     identity: VerifiedIdentity,
     upsertUser: (user: Omit<PlatformUser, 'id' | 'createdAt'>) => Promise<PlatformUser>,
   ): Promise<string> {
-    const roleResult = resolveRole(
-      identity,
-      this.identityConfig.roleMapping,
-      this.identityConfig.defaultRole,
-    );
+    let role: UserRole;
 
-    if (isDenied(roleResult)) {
-      throw new AuthenticationError(roleResult.reason, 'ACCESS_DENIED');
+    if (identity.provider === 'local') {
+      const { users } = getRepositories();
+      const existing = await users.findByIdpSubject(identity.subject, 'local');
+      role = (existing?.role as UserRole | undefined) ?? 'operator';
+    } else {
+      const roleResult = resolveRole(
+        identity,
+        this.identityConfig.roleMapping,
+        this.identityConfig.defaultRole,
+      );
+
+      if (isDenied(roleResult)) {
+        throw new AuthenticationError(roleResult.reason, 'ACCESS_DENIED');
+      }
+
+      role = roleResult.role;
     }
 
     const user = await upsertUser({
       email: identity.email,
       displayName: identity.displayName,
-      role: roleResult.role,
+      role,
       authProvider: identity.provider,
       idpSubject: identity.subject,
       idpGroups: identity.groups,

@@ -99,6 +99,36 @@ pnpm --filter @gestalt/cli build
 
 ## Authentication issues
 
+### Admin setup fails with "admin already exists"
+
+**Symptom:** Running `gestalt init-admin` prints:
+```
+Admin setup is not available — a user already exists.
+The /auth/admin/setup endpoint only runs on a fresh platform.
+```
+
+**Cause:** `POST /auth/admin/setup` is a first-boot-only endpoint. Once any
+user exists in the `users` table the server returns 403 so the bootstrap
+path cannot be used to create a second back-door admin.
+
+**Resolution — you forgot the existing admin password:** sign in as the
+existing admin or have another admin reset your password from the dashboard.
+There is intentionally no CLI bypass.
+
+**Resolution — you want a clean re-install (development only):**
+```bash
+docker-compose down -v   # destroys all data; back up first
+docker-compose up -d
+gestalt init-admin
+```
+
+**Resolution — you want a new operator/viewer account, not a second admin:**
+once the IdP path is fully wired up, additional accounts come from the
+corporate IdP. While the platform is on local auth, ask the existing admin
+to provision the account through the dashboard.
+
+---
+
 ### Users cannot log in — Kerberos
 
 **Symptom:** Browser shows a login prompt instead of seamless SSO, or returns 401.

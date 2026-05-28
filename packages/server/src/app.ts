@@ -18,6 +18,7 @@ import type { GestaltConfig } from '@gestalt/core';
 import { createContextLogger } from '@gestalt/core';
 import { registerAuthMiddleware } from './auth/middleware';
 import { registerAuthRoutes } from './auth/routes';
+import { registerAdminRoutes } from './routes/admin';
 import { registerIntentRoutes } from './routes/intents';
 import { registerStatusRoutes } from './routes/status';
 import { registerEventsRoute } from './routes/events';
@@ -67,6 +68,7 @@ export async function createApp(
 
   await registerStatusRoutes(app);
   await registerAuthRoutes(app, authManager);
+  await registerAdminRoutes(app, sessionConfig);
   await registerIntentRoutes(app);
   await registerEventsRoute(app, sessionConfig);
   await registerOversightRoutes(app);

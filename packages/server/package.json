@@ -18,10 +18,12 @@
     "@fastify/static": "^7.0.0",
     "@gestalt/adapter-postgres": "workspace:*",
     "@gestalt/core": "workspace:*",
+    "bcrypt": "^5.1.1",
     "fastify": "^4.27.0",
     "jose": "^5.2.0"
   },
   "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
     "@types/node": "^20.0.0",
     "tsx": "^4.7.0",
     "typescript": "^5.4.0",

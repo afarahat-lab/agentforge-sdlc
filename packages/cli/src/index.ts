@@ -5,6 +5,7 @@
  * Commands:
  *   gestalt login [--server <url>]
  *   gestalt init
+ *   gestalt init-admin [--server <url>]
  *   gestalt run "<intent>" [--priority critical|high|normal|low]
  *   gestalt status [--id <correlationId>]
  *   gestalt logs [--follow] [--id <correlationId>]
@@ -14,6 +15,7 @@
 import { program } from 'commander';
 import { loginCommand } from './commands/login';
 import { initCommand } from './commands/init';
+import { initAdminCommand } from './commands/init-admin';
 import { runCommand } from './commands/run';
 import { statusCommand } from './commands/status';
 import { logsCommand, dashboardCommand } from './commands/logs';
@@ -40,6 +42,15 @@ program
   .description('Initialize a new project with a generated harness')
   .action(async () => {
     await initCommand().catch(fatalError);
+  });
+
+// gestalt init-admin
+program
+  .command('init-admin')
+  .description('Create the first admin user (local auth, first-boot only)')
+  .option('--server <url>', 'Server URL', 'http://localhost:3000')
+  .action(async (opts: { server: string }) => {
+    await initAdminCommand(opts.server).catch(fatalError);
   });
 
 // gestalt run

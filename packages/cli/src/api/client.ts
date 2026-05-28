@@ -71,6 +71,17 @@ export class GestaltApiClient {
     return this.post<{ token: string }>('/auth/login', { email, password });
   }
 
+  async adminSetup(params: {
+    email: string;
+    password: string;
+    displayName: string;
+  }): Promise<{
+    token: string;
+    user: { id: string; email: string; displayName: string; role: string; authProvider: string };
+  }> {
+    return this.post('/auth/admin/setup', params);
+  }
+
   async getMe(): Promise<{ id: string; email: string; role: string }> {
     return this.get('/auth/me');
   }

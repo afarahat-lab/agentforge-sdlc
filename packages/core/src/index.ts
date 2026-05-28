@@ -36,10 +36,11 @@ export type {
   AgentExecutionRecord, ExecutionStatus,
   AuditRecord,
   UserRecord,
+  LocalAuthRecord,
   RepositoryRegistry,
   IntentRepository, AgentExecutionRepository,
   ArtifactRepository, SignalRepository,
-  AuditRepository, UserRepository,
+  AuditRepository, UserRepository, LocalAuthRepository,
 } from './repository/index';
 export { getRepositories, setRepositories } from './repository/index';
 

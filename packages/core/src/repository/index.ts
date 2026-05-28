@@ -134,6 +134,22 @@ export interface UserRepository extends BaseRepository {
   findById(id: string): Promise<UserRecord | null>;
   findByIdpSubject(subject: string, provider: string): Promise<UserRecord | null>;
   list(): Promise<UserRecord[]>;
+  count(): Promise<number>;
+}
+
+// ─── Local auth credentials repository ────────────────────────────────────────
+
+export interface LocalAuthRecord {
+  id: string;
+  userId: string;
+  email: string;
+  passwordHash: string;
+  createdAt: Date;
+}
+
+export interface LocalAuthRepository extends BaseRepository {
+  create(record: Omit<LocalAuthRecord, 'id' | 'createdAt'>): Promise<LocalAuthRecord>;
+  findByEmail(email: string): Promise<LocalAuthRecord | null>;
 }
 
 // ─── Repository registry ──────────────────────────────────────────────────────
@@ -150,6 +166,7 @@ export interface RepositoryRegistry {
   signals: SignalRepository;
   audit: AuditRepository;
   users: UserRepository;
+  localAuth: LocalAuthRepository;
 }
 
 let _registry: RepositoryRegistry | null = null;

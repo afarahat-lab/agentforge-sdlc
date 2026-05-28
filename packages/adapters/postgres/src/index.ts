@@ -11,6 +11,7 @@ import { createDb, closeDb, pingDb } from './client';
 import { PostgresIntentRepository } from './repositories/intents';
 import { PostgresAuditRepository } from './repositories/audit';
 import { PostgresUserRepository } from './repositories/users';
+import { PostgresLocalAuthRepository } from './repositories/local-auth';
 import { runMigrations } from './migrations/runner';
 
 export { closeDb, pingDb };
@@ -36,5 +37,6 @@ export async function createPostgresAdapter(databaseUrl: string): Promise<Reposi
     signals:    { healthCheck: pingDb, save: stub, findByCorrelationId: stub, findUnresolved: stub, markResolved: stub } as never,
     audit:      new PostgresAuditRepository(),
     users:      new PostgresUserRepository(),
+    localAuth:  new PostgresLocalAuthRepository(),
   };
 }

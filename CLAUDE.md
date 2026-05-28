@@ -134,24 +134,49 @@ docker-compose logs -f server
 
 ## Current build status
 
-As of the last session, packages build in this order:
-- `@gestalt/core` — ✅ compiles
-- `@gestalt/adapter-postgres` — ✅ compiles
-- `@gestalt/agents-generate` — type fixes applied, verify with `pnpm --filter @gestalt/agents-generate build`
-- All other agent packages — stubs, should compile
-- `@gestalt/server` — compiles
-- `@gestalt/dashboard` — React/Vite, built separately
+`pnpm -r build` compiles cleanly across all 12 buildable workspace packages.
+The most recent verifying build is from the 2026-05-28 first-boot admin
+setup session — see the **Current state** section below for the
+authoritative snapshot and the **Session log** for what changed since.
+
+| Package | Status |
+|---|---|
+| `@gestalt/core` | ✅ compiles |
+| `@gestalt/adapter-postgres` | ✅ compiles |
+| `@gestalt/adapter-oracle` | ✅ compiles (stub) |
+| `@gestalt/adapter-mssql` | ✅ compiles (stub) |
+| `@gestalt/agents-generate` | ✅ compiles |
+| `@gestalt/agents-quality-gate` | ✅ compiles (stub) |
+| `@gestalt/agents-deploy` | ✅ compiles (stub) |
+| `@gestalt/agents-maintenance` | ✅ compiles (stub) |
+| `@gestalt/registry` | ✅ compiles |
+| `@gestalt/server` | ✅ compiles |
+| `@gestalt/cli` | ✅ compiles |
+| `@gestalt/dashboard` | ✅ builds (Vite) |
+
+`docker-compose up -d` brings server + postgres + redis up `Up (healthy)`;
+`/health` returns 200; protected routes return 401 without a JWT.
 
 ## Known issues to resolve
 
-Run `pnpm --filter <package> build` on each package after `@gestalt/core` and
-fix any TypeScript errors before attempting `docker-compose up -d`. The most
-common error patterns:
+None blocking the build today. Areas to keep in mind when working in this repo:
 
-1. **FeedbackSignal literals** missing `autoResolvable` and `createdAt` fields
-2. **ContextSnapshot** field name mismatches (`architectureMd` vs `architecture`)
-3. **Optional fields** passed as `string | undefined` to functions expecting `string`
-   — use `...(val !== undefined ? { key: val } : {})`
+1. **`UserRepository` extensions touch every adapter.** Adding a method to
+   the interface (as the `count()` addition for first-boot admin setup did)
+   means the Oracle and SQL Server stubs must learn the same method when
+   they leave stub state.
+2. **Type alignment between `@gestalt/agents-generate` and `@gestalt/core`.**
+   The local `ContextSnapshot` and `FeedbackSignal` types in
+   `packages/agents/generate/src/types.ts` must keep matching the core types
+   — see the **Key type alignment rules** section above.
+3. **CLI pins chalk@4 / ora@5 for CJS compatibility.** Do not upgrade either
+   without performing the full ESM migration (`"type": "module"`, `.js`
+   extensions on relative imports, Dockerfile update). The pin is
+   intentional, not a bug.
+4. **`toTaskPriority()` mapper in `packages/server/src/routes/intents.ts`.**
+   Bridges `IntentRecord.priority` (`'low'`) and core `TaskPriority`
+   (`'background'`). If priority levels are extended, both types must move
+   together.
 
 ---
 
@@ -233,7 +258,7 @@ Next task for Claude Code:
 
 ## Current state (keep this section current)
 
-**Last updated:** 2026-05-28 (Claude Code — CLI install fix)
+**Last updated:** 2026-05-28 (Claude Code — CLAUDE.md status refresh)
 
 **Repo:** https://github.com/afarahat-lab/gestalt
 
@@ -256,6 +281,16 @@ Next task for Claude Code:
 **CLI install:**
 - `@gestalt/cli` is private — not on npm
 - Install: `pnpm --filter @gestalt/cli build && cd packages/cli && npm link`
+
+**First-boot admin setup:**
+- `gestalt init-admin` posts to `POST /auth/admin/setup` (public, zero-user guarded)
+- Creates a `users` row (role: admin, authProvider: local) plus a `local_auth`
+  row holding the bcrypt password hash, writes an audit record, and returns a JWT
+- On subsequent calls the endpoint returns 403 (`ADMIN_ALREADY_EXISTS`)
+- `POST /auth/login` is now wired up: routes through AuthManager → LocalProvider →
+  bcrypt.compare against local_auth.password_hash
+- AuthManager preserves the existing role for local-provider logins (so the
+  first admin stays admin and is not downgraded to operator on next login)
 
 **Pending enhancements (design in chat first):**
 - None yet
@@ -303,6 +338,103 @@ Build status:
 - No source changes — TypeScript build is unaffected
 - `docker-compose up -d` state from the prior session is unchanged
 
+### Session 2026-05-28 — Claude Code (first-boot admin setup)
+Changed:
+- `packages/adapters/postgres/src/migrations/002_local_auth.sql`: new migration
+  adding the `local_auth` table (user_id FK → users with ON DELETE CASCADE,
+  unique email, bcrypt password_hash). Runner tracks application — no manual
+  INSERT into schema_migrations inside the file
+- `packages/core/src/repository/index.ts`: added `LocalAuthRepository`
+  interface + `LocalAuthRecord` type; added `count()` to `UserRepository`
+  (zero-user guard for /auth/admin/setup); added `localAuth` to
+  `RepositoryRegistry`
+- `packages/core/src/index.ts`: re-exported `LocalAuthRepository` and
+  `LocalAuthRecord`
+- `packages/adapters/postgres/src/repositories/users.ts`: implemented
+  `count()`
+- `packages/adapters/postgres/src/repositories/local-auth.ts`: new
+  `PostgresLocalAuthRepository` (create + findByEmail)
+- `packages/adapters/postgres/src/index.ts`: wired `PostgresLocalAuthRepository`
+  into the registry returned by `createPostgresAdapter`
+- `packages/server/package.json`: added `bcrypt@^5.1.1` runtime dep and
+  `@types/bcrypt@^5.0.2` dev dep
+- `packages/server/src/routes/admin.ts`: new route module — `POST
+  /auth/admin/setup`. Public endpoint guarded by `users.count() === 0`,
+  bcrypt-hashes (12 rounds) the password, upserts the user with role 'admin'
+  / authProvider 'local' / idpSubject = email, inserts the local_auth row,
+  writes a manual audit record (the audit hook skips because there is no
+  authenticated `request.user` yet), and returns `{ token, user }`
+- `packages/server/src/auth/middleware.ts`: added `POST /auth/admin/setup` to
+  `PUBLIC_ROUTES` so the JWT preHandler does not block it
+- `packages/server/src/auth/providers/local.ts`: replaced the
+  "not yet implemented" stub. Now looks up local_auth by email,
+  bcrypt.compare-s, throws `AuthenticationError` on missing creds or wrong
+  password, returns a `VerifiedIdentity` with provider: 'local' on success
+- `packages/server/src/auth/auth-manager.ts`: imported `getRepositories`;
+  changed `createSession` so local-provider identities preserve the existing
+  user's role (look up by idpSubject + 'local'), falling back to 'operator'.
+  IdP identities still flow through `resolveRole` as before
+- `packages/server/src/auth/routes.ts`: implemented `POST /auth/login` —
+  validates body, wraps the Fastify request as `IncomingRequest`, calls
+  `authManager.authenticate`, returns `{ token, user }` on success and maps
+  `AuthenticationError.code === 'LOCAL_IN_PRODUCTION'` to 403, everything
+  else to 401
+- `packages/server/src/app.ts`: registered the new admin route module after
+  `registerAuthRoutes`
+- `packages/cli/src/api/client.ts`: added `adminSetup({ email, password,
+  displayName })` typed wrapper around POST /auth/admin/setup
+- `packages/cli/src/commands/init-admin.ts`: new CLI command — health check,
+  prompts (email, displayName, password, confirmPassword), client-side
+  validation (>= 8 chars, passwords match), calls `client.adminSetup`,
+  stores the JWT via `updateCliConfig`, prints the local-auth warning
+  banner, special-cases a 403 with a "use gestalt login" message
+- `packages/cli/src/index.ts`: registered `gestalt init-admin
+  [--server <url>]` and updated the file header comment
+- `docs/guides/quick-start.md`: Step 4 now uses `gestalt init-admin` (was
+  `gestalt init local-admin`, which never existed); added a forward-link to
+  the new runbook entry
+- `docs/runbooks/common-issues.md`: added an "Admin setup fails with admin
+  already exists" entry explaining the 403, the deliberate absence of a CLI
+  bypass, and the three resolution paths (sign in / wipe volume in dev / new
+  account via IdP)
+
+Decisions made:
+- **Separate `local_auth` table** rather than adding a nullable
+  `password_hash` column to `users`. Keeps credentials isolated from the
+  shadow user record (which is otherwise IdP-mirrored) and lets us drop
+  `local_auth` cleanly when local mode is retired
+- **`LocalAuthRepository` in core, implemented in adapter-postgres** — same
+  pattern as the other repos so ADR-004 (no DB access outside adapters) still
+  holds. Provider and route call through `getRepositories()`
+- **Preserve role on local login** by changing `AuthManager.createSession`
+  rather than the role-mapper. The role-mapper is pure logic (no DB); the
+  manager already has access. This is a focused fix — IdP role re-evaluation
+  is untouched
+- **Manual audit write inside the admin route**, because the audit hook
+  short-circuits when `request.user` is undefined. The actor on the audit
+  row is the just-created admin's UUID, which is the most informative actor
+  available at that moment
+- **bcrypt over argon2** — bcrypt was specified in the task; matches the
+  comments already in the codebase ("Phase 2: bcrypt verification")
+- **12 rounds** for bcrypt — standard for new systems in 2026, balances
+  CPU cost vs. brute-force resistance
+- Did not migrate the CLI to ESM despite the pinned chalk@4/ora@5
+  caveat flagged in the previous session — staying on CJS keeps this change
+  surgical. That migration remains a separate task
+
+Build status:
+- `pnpm -r build` — all 12 buildable packages compile clean (verified)
+- Migration not yet applied — `002_local_auth.sql` runs the next time the
+  server starts against the postgres container
+- `docker-compose up -d` not exercised in this session; expected to work
+  unchanged since type-check passes and the bcrypt native binding installed
+  successfully via node-pre-gyp
+- End-to-end smoke test (run `gestalt init-admin`, then `gestalt login` with
+  the same creds, then call a protected route with the returned token) is
+  the next verification step
+
+---
+
 ### Session 2026-05-28 — Design chat review
 
 Evaluation: Claude Code session was clean and well-aligned. No architectural drift detected.
@@ -318,3 +450,34 @@ One item flagged for future attention:
   because `IntentRecord.priority` uses `'low'` but core `TaskPriority` uses
   `'background'`. If priority levels are ever extended, both types need updating
   together.
+
+---
+
+### Session 2026-05-28 — Claude Code (CLAUDE.md status refresh)
+Changed:
+- `CLAUDE.md`: rewrote the **Current build status** section (lines ~135-143)
+  to reflect that `pnpm -r build` compiles cleanly across all 12 packages and
+  to list every workspace package individually instead of describing
+  `agents-generate` as "type fixes applied, verify with…". Added a one-line
+  pointer to the **Current state** section as the authoritative snapshot
+- `CLAUDE.md`: rewrote the **Known issues to resolve** section. The old
+  numbered list (FeedbackSignal / ContextSnapshot / optional-field patterns)
+  described errors that were resolved in the 2026-05-28 build-fix session and
+  no longer apply. Replaced with four areas to keep in mind when modifying
+  this repo: `UserRepository` extensions need parity across all adapters,
+  `agents-generate` ↔ `core` type alignment, the intentional CJS pin on
+  chalk/ora in the CLI, and the `toTaskPriority` mapper coupling
+
+Decisions made:
+- Kept the "Known issues to resolve" heading rather than renaming it (e.g.
+  to "Things to watch") — the section appears in the **Before doing
+  anything** reading list, so future agents will still find it at the same
+  anchor. The content under the heading now matches reality
+- Did not duplicate the package status table into the **Current state**
+  section. The new build-status table is granular ("compiles clean") and the
+  Current state section already lists what is and isn't built feature-wise
+  ("`@gestalt/agents-quality-gate` — stubs only"). They answer different
+  questions, so both stay
+
+Build status:
+- No source changes — TypeScript build is unaffected

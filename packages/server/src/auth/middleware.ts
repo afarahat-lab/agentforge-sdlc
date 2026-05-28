@@ -22,6 +22,7 @@ const PUBLIC_ROUTES = new Set([
   'GET /auth/oidc/login',
   'GET /auth/oidc/callback',
   'POST /auth/login',
+  'POST /auth/admin/setup',  // first-boot only — guarded by zero-user check
   'GET /events',   // SSE — token passed as query param, validated inside route
 ]);
 

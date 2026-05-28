@@ -104,11 +104,19 @@ pnpm --filter @gestalt/cli build
 cd packages/cli && npm link && cd ../..
 
 # Create the first admin user (local fallback mode)
-gestalt init local-admin
-# Follow the prompts: email + password
+gestalt init-admin
+# Follow the prompts: email, display name, password (with confirmation)
 
-# You will see a non-production warning — this is expected for local auth
+# You will see a non-production warning — this is expected for local auth.
+# The token returned by the server is stored in ~/.gestalt/config.json
+# so subsequent commands (gestalt run, gestalt status) are already signed in.
 ```
+
+> `gestalt init-admin` only works on a fresh installation. Once a user
+> exists, the `/auth/admin/setup` endpoint returns 403 and you must use
+> `gestalt login` instead. See
+> [`docs/runbooks/common-issues.md`](../runbooks/common-issues.md#admin-setup-fails-with-admin-already-exists)
+> if the command refuses to run.
 
 > If `npm install -g @gestalt/cli` returns a `404 Not Found`, that is expected.
 > The CLI lives in this monorepo and is marked `"private": true`. Use the
