@@ -144,3 +144,7 @@ export class ApiError extends Error {
     super(`API error ${status}: ${body}`);
   }
 }
+
+  async getActiveAgents(): Promise<{ data: AgentExecutionSummary[] }> {
+    return this.get('/status/agents');
+  }

@@ -1,0 +1,84 @@
+/* ─── Design tokens ─────────────────────────────────────────────────────────── */
+:root {
+  /* Surfaces */
+  --bg-base:       #0a0c0e;
+  --bg-raised:     #111418;
+  --bg-overlay:    #181d23;
+  --bg-subtle:     #1e242c;
+
+  /* Borders */
+  --border:        #252d38;
+  --border-strong: #2e3a48;
+
+  /* Text */
+  --text-primary:  #e8edf2;
+  --text-secondary:#8b97a8;
+  --text-dim:      #4a5568;
+
+  /* Status */
+  --green:         #22c55e;
+  --green-dim:     #15803d;
+  --amber:         #f59e0b;
+  --amber-dim:     #92400e;
+  --red:           #ef4444;
+  --red-dim:       #7f1d1d;
+  --blue:          #3b82f6;
+  --blue-dim:      #1e3a5f;
+  --purple:        #a855f7;
+
+  /* Accent */
+  --accent:        #22c55e;
+  --accent-glow:   rgba(34, 197, 94, 0.15);
+
+  /* Typography */
+  --font-sans:  'IBM Plex Sans', system-ui, sans-serif;
+  --font-mono:  'IBM Plex Mono', 'Fira Code', monospace;
+
+  /* Spacing */
+  --sidebar-w: 220px;
+}
+
+/* ─── Reset ──────────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #root {
+  height: 100%;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; text-decoration: none; }
+button { font-family: inherit; cursor: pointer; border: none; background: none; }
+input, textarea { font-family: var(--font-mono); }
+
+/* ─── Scrollbars ─────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
+
+/* ─── Utility classes ────────────────────────────────────────────────────────── */
+.mono { font-family: var(--font-mono); }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+
+/* ─── Status colours ─────────────────────────────────────────────────────────── */
+.status-deployed,  .status-approved,  .status-pass    { color: var(--green); }
+.status-generating,.status-deploying, .status-running { color: var(--blue); }
+.status-failed,    .status-escalated, .status-fail    { color: var(--red); }
+.status-pending,   .status-skipped                    { color: var(--text-dim); }
+.status-waiting    { color: var(--amber); }
+
+/* ─── Animations ─────────────────────────────────────────────────────────────── */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in { animation: fade-in 0.2s ease-out; }

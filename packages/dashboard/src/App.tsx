@@ -1,25 +1,55 @@
-/**
- * Gestalt Dashboard — root component.
- *
- * Routing:
- *   /                → IntentFeed
- *   /intents/:id     → IntentDetail
- *   /agents          → ActiveAgents
- *   /gate            → QualityGate
- *   /deployments     → Deployments
- *   /maintenance     → Maintenance
- *   /alerts          → Alerts (badge shows open alert count)
- *
- * Layout:
- *   Left sidebar navigation
- *   Main content area
- *   Live connection status indicator (top right)
- *
- * Full implementation: Phase 2 (React Router + Tailwind).
- */
+import React, { useMemo } from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { ApiProvider } from './hooks/useApi';
+import { DashboardApiClient } from './api/client';
+import { Layout } from './components/layout/Layout';
+import { Login } from './views/Login';
+import { IntentFeed } from './views/IntentFeed';
+import { IntentDetail } from './views/IntentDetail';
+import { ActiveAgents } from './views/ActiveAgents';
+import { QualityGate } from './views/QualityGate';
+import { Deployments } from './views/Deployments';
+import { Maintenance } from './views/Maintenance';
+import { Alerts } from './views/Alerts';
 
-import type React from 'react';
+function RequireAuth({ children }: { children: React.ReactNode }) {
+  const token = localStorage.getItem('gestalt_token');
+  if (!token) return <Navigate to="/login" replace />;
+  return <>{children}</>;
+}
 
-export default function App(): React.ReactElement {
-  throw new Error('App not yet implemented — pending Phase 2');
+export default function App() {
+  const client = useMemo(() => {
+    const c = new DashboardApiClient(window.location.origin);
+    const token = localStorage.getItem('gestalt_token');
+    if (token) c.setToken(token);
+    return c;
+  }, []);
+
+  return (
+    <ApiProvider value={client}>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route
+            path="/"
+            element={
+              <RequireAuth>
+                <Layout />
+              </RequireAuth>
+            }
+          >
+            <Route index element={<IntentFeed />} />
+            <Route path="intents/:id" element={<IntentDetail />} />
+            <Route path="agents" element={<ActiveAgents />} />
+            <Route path="gate" element={<QualityGate />} />
+            <Route path="deployments" element={<Deployments />} />
+            <Route path="maintenance" element={<Maintenance />} />
+            <Route path="alerts" element={<Alerts />} />
+          </Route>
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </ApiProvider>
+  );
 }
