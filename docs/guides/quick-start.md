@@ -97,8 +97,11 @@ docker-compose ps
 ## Step 4 — Initialize and create admin user
 
 ```bash
-# Install the CLI (run once)
-npm install -g @gestalt/cli
+# Install the CLI from the local workspace (run once).
+# The CLI is not published to npm — install it via `npm link` after building.
+pnpm install
+pnpm --filter @gestalt/cli build
+cd packages/cli && npm link && cd ../..
 
 # Create the first admin user (local fallback mode)
 gestalt init local-admin
@@ -106,6 +109,12 @@ gestalt init local-admin
 
 # You will see a non-production warning — this is expected for local auth
 ```
+
+> If `npm install -g @gestalt/cli` returns a `404 Not Found`, that is expected.
+> The CLI lives in this monorepo and is marked `"private": true`. Use the
+> `npm link` workflow above. See
+> [`docs/runbooks/common-issues.md`](../runbooks/common-issues.md#cli-issues)
+> for details.
 
 ---
 

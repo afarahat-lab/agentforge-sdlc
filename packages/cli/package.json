@@ -1,7 +1,7 @@
 {
   "name": "@gestalt/cli",
   "version": "0.1.0",
-  "private": false,
+  "private": true,
   "description": "Gestalt CLI — agent-first software development platform",
   "bin": {
     "gestalt": "dist/index.js"

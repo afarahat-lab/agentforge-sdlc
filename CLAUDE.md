@@ -233,35 +233,75 @@ Next task for Claude Code:
 
 ## Current state (keep this section current)
 
-**Last updated:** 2026-05 (design chat)
+**Last updated:** 2026-05-28 (Claude Code — CLI install fix)
 
 **Repo:** https://github.com/afarahat-lab/gestalt
 
-**What is built and designed:**
+**What is built and working:**
 - All 8 architecture layers fully designed and documented
-- 6 packages implemented (see session log above)
-- Docker build partially working — failing at TypeScript compilation
+- All 12 buildable workspace packages compile clean (`pnpm -r build`)
+- `docker-compose up -d` succeeds — server, postgres, redis all `Up (healthy)`
+- Server reachable on http://localhost:3000 — `/health` returns 200
+- Auth middleware active — protected routes return 401
+- CLI installed via `pnpm --filter @gestalt/cli build && cd packages/cli && npm link`
 
 **What is not yet built:**
-- `@gestalt/agents-quality-gate` — stubs only, needs full implementation
-- `@gestalt/agents-deploy` — stubs only (pipeline/scanner adapters need implementing)
-- `@gestalt/agents-maintenance` — stubs only (monitoring adapters need implementing)
+- `@gestalt/agents-quality-gate` — stubs only
+- `@gestalt/agents-deploy` — stubs only
+- `@gestalt/agents-maintenance` — stubs only
 - `@gestalt/adapter-oracle` — stub
 - `@gestalt/adapter-mssql` — stub
 - `@gestalt/registry` — types and client only
 
-**Pending enhancements (to be designed in chat before implementing):**
-- None yet — add here as they are discussed
+**CLI install:**
+- `@gestalt/cli` is private — not on npm
+- Install: `pnpm --filter @gestalt/cli build && cd packages/cli && npm link`
+
+**Pending enhancements (design in chat first):**
+- None yet
 
 **Known architectural constraints Claude Code must respect:**
-- See AGENTS.md for full list
 - pnpm 9.x only (Node 20 compatibility)
 - No direct DB access outside adapter packages
 - No direct LLM calls outside @gestalt/core/llm
 - GOLDEN_PRINCIPLE_BREACH signals are never auto-resolved
 - All state-changing operations write an audit record (GP-002)
+- Server must not import from packages/dashboard/src — use server-local type mirrors
+- /events SSE route is canonical in routes/events.ts — do not re-register elsewhere
 
 ---
+
+### Session 2026-05-28 — Claude Code (CLI install fix)
+Changed:
+- `packages/cli/package.json`: flipped `"private": false` → `"private": true`
+  so `npm publish` will not be suggested and the package's intent (local
+  workspace only) matches reality
+- `README.md`: replaced the `npm install -g @gestalt/cli` quick-start snippet
+  with the `pnpm install` + `pnpm --filter @gestalt/cli build` + `npm link`
+  workflow that actually works in this monorepo
+- `docs/guides/quick-start.md`: same replacement, plus a forward-link to the
+  new runbook entry so users who hit the 404 land on the explanation
+- `docs/guides/deployment.md`: replaced the on-server install with a clone +
+  build + `npm link` flow (and clarified the CLI runs on the operator
+  workstation, not on the server host)
+- `docs/runbooks/common-issues.md`: added a **CLI issues** section covering
+  the `npm install -g @gestalt/cli` 404 and a follow-up `gestalt: command not
+  found` (PATH + build prerequisite) — both are predictable from the new
+  install flow
+
+Decisions made:
+- Used `npm link` rather than `pnpm link --global` because the existing docs
+  reference `npm` and the CLI's package.json `bin` field is the npm
+  convention. Both work, but mixing tools in user-facing instructions is the
+  failure mode this session is fixing — better to stay consistent on `npm`
+  for the install step even though dependency install uses pnpm
+- Did not edit `packages/cli/README.md` or `docs/ARCHITECTURE.md` despite
+  matching the `@gestalt/cli` grep. Those mention the package by name
+  (orientation / architecture overview) but do not contain install commands
+
+Build status:
+- No source changes — TypeScript build is unaffected
+- `docker-compose up -d` state from the prior session is unchanged
 
 ### Session 2026-05-28 — Design chat review
 

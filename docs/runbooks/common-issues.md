@@ -41,6 +41,62 @@ See the [Deployment Guide](../guides/deployment.md#step-3) for full instructions
 
 ---
 
+## CLI issues
+
+### `npm install -g @gestalt/cli` returns 404 Not Found
+
+**Symptom:**
+```
+npm error 404 Not Found - GET https://registry.npmjs.org/@gestalt%2fcli - Not found
+npm error 404  '@gestalt/cli@*' is not in this registry.
+```
+
+**Cause:** The CLI is not published to the public npm registry. `@gestalt/cli`
+lives in this monorepo and is marked `"private": true` in its `package.json`.
+The earlier docs that suggested `npm install -g @gestalt/cli` were incorrect.
+
+**Resolution:** Install from the local workspace using `npm link`:
+
+```bash
+git clone https://github.com/afarahat-lab/gestalt.git
+cd gestalt
+pnpm install
+pnpm --filter @gestalt/cli build
+cd packages/cli && npm link
+```
+
+After `npm link`, `gestalt` is available on your `PATH` and points at the
+just-built `dist/index.js` in this workspace. Re-run `pnpm --filter
+@gestalt/cli build` after pulling CLI changes — `npm link` only links the
+package; it does not re-compile it.
+
+**Cleanup:** To remove the symlink later, run `npm unlink -g @gestalt/cli`.
+
+---
+
+### `gestalt: command not found` after `npm link`
+
+**Check 1 — npm global bin on PATH:**
+```bash
+npm config get prefix
+# e.g. /usr/local or /Users/<you>/.npm-global
+ls $(npm config get prefix)/bin/gestalt
+```
+
+If `prefix/bin` is not on `PATH`, add it to your shell rc:
+```bash
+export PATH="$(npm config get prefix)/bin:$PATH"
+```
+
+**Check 2 — CLI built before linking:**
+`npm link` symlinks the package directory, but it does not invoke `build`.
+If `dist/index.js` does not exist, the `gestalt` shim will fail to launch.
+```bash
+pnpm --filter @gestalt/cli build
+```
+
+---
+
 ## Authentication issues
 
 ### Users cannot log in — Kerberos

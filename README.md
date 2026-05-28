@@ -38,7 +38,12 @@ git clone https://github.com/afarahat-lab/gestalt.git
 cd gestalt
 cp .env.example .env   # fill in LLM and database credentials
 docker-compose up -d
-npm install -g @gestalt/cli
+
+# Install the CLI from the local workspace (not published to npm)
+pnpm install
+pnpm --filter @gestalt/cli build
+cd packages/cli && npm link && cd ../..
+
 gestalt init local-admin
 open http://localhost:3000
 ```

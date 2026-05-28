@@ -234,8 +234,13 @@ server {
 ## Step 9 — Create initial admin user
 
 ```bash
-# Install CLI on the server
-npm install -g @gestalt/cli
+# Install the CLI from the monorepo (the package is not published to npm).
+# Run these on the operator workstation that will manage this server.
+git clone https://github.com/afarahat-lab/gestalt.git
+cd gestalt
+pnpm install
+pnpm --filter @gestalt/cli build
+cd packages/cli && npm link && cd ../..
 
 # Point CLI at the server
 export AGENTFORGE_SERVER=https://gestalt.company.com
