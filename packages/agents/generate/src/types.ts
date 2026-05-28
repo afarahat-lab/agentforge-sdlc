@@ -111,9 +111,12 @@ export interface ADR {
 }
 
 export interface ContextSnapshot {
+  projectRoot: string;
   harness: HarnessConfig;
-  architecture: ArchitectureSpec;
-  domain: DomainModel;
+  architectureMd: string;          // raw markdown — used by prompts
+  domainMd: string;                // raw markdown — used by prompts
+  architecture: ArchitectureSpec;  // parsed — used by agents
+  domain: DomainModel;             // parsed — used by agents
   goldenPrinciples: Principle[];
   relevantDecisions: ADR[];
   intentSpec: IntentSpec;
@@ -142,6 +145,8 @@ export interface FeedbackSignal {
   sourceAgent: AgentRole;
   message: string;
   location?: { file: string; line?: number };
+  autoResolvable: boolean;
+  createdAt: Date;
 }
 
 export interface AgentResult {

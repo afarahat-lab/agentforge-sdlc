@@ -70,6 +70,8 @@ export async function runIntentAgent(
         severity: 'high',
         sourceAgent: 'intent-agent',
         message: `Intent parsing failed after ${MAX_INTERNAL_RETRIES + 1} attempts: ${lastError?.message}`,
+        autoResolvable: true,
+        createdAt: new Date(),
       },
     ],
     tokensUsed: 0,
