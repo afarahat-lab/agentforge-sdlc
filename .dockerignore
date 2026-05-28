@@ -1,14 +1,20 @@
+# Never copy these into the build context
 node_modules
 **/node_modules
-**/dist
+.git
+.env
+.env.local
 **/.turbo
 **/*.log
-.env
-.env.*
-!.env.example
-.git
-.gitignore
+npm-debug.log*
+
+# Don't copy docs or templates — not needed for the server build
 docs
 templates
-*.md
-!packages/*/README.md
+
+# Don't copy test files into image
+**/*.test.ts
+**/*.spec.ts
+
+# dist directories are built inside Docker, not copied in
+# (intentionally NOT excluded so pnpm install can resolve paths)
