@@ -12,7 +12,7 @@ For production corporate deployment, see [Deployment Guide](./deployment.md).
 | Requirement | Version | Notes |
 |---|---|---|
 | Node.js | 20+ | |
-| pnpm | 9+ | `npm install -g pnpm` |
+| pnpm | 9.x (not 10+) | `npm install -g pnpm@9` — pnpm 10+ requires Node 22 |
 | Docker | 24.0+ | Docker Desktop for macOS/Windows — must be running before `docker-compose up` |
 | Docker Compose | 2.20+ | Bundled with Docker Desktop |
 | Git | 2.38+ | |
