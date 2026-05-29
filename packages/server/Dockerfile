@@ -54,6 +54,11 @@ FROM node:20-alpine AS production
 
 WORKDIR /app
 
+# `git` is required at runtime — simple-git shells out to the system binary
+# for clone / commit / push (ADR-032). `openssh-client` is needed for SSH
+# remotes (HTTPS+PAT still works without it but most operators use both).
+RUN apk add --no-cache git openssh-client
+
 RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 
 COPY package.json pnpm-workspace.yaml ./

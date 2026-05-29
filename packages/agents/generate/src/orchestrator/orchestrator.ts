@@ -8,6 +8,10 @@
  * the cycle can be resumed after a crash or clarification pause.
  */
 
+import { mkdtemp, rm } from 'fs/promises';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import { simpleGit } from 'simple-git';
 import {
   createWorker, dispatch, getRepositories, getLLMClient,
   createContextLogger, QUEUE_NAMES,
@@ -26,12 +30,34 @@ import { runTestAgent } from '../agents/test-agent';
 import type { ExecutionPlan, AgentResult, GateFeedback } from '../types';
 import type { AgentRole } from '@gestalt/core';
 
+/**
+ * Embeds a Git personal access token into an HTTPS clone URL.
+ * Mirrors the helper in `packages/server/src/routes/projects.ts` so the
+ * worker and the harness-init route stay symmetric. SSH URLs pass through
+ * unchanged (auth would come from the container's SSH key — out of scope).
+ */
+function authenticatedGitUrl(gitUrl: string, token: string): string {
+  if (!gitUrl.startsWith('http://') && !gitUrl.startsWith('https://')) {
+    return gitUrl;
+  }
+  const url = new URL(gitUrl);
+  url.username = 'x-access-token';
+  url.password = token;
+  return url.toString();
+}
+
 const log = createContextLogger({ module: 'orchestrator' });
 
 interface IntentTaskPayload {
   intentId: string;
   text: string;
   projectId: string;
+  /**
+   * Pre-set projectRoot. Reserved for resume / clarification flows that
+   * already cloned a working tree. Normal first-time dispatch leaves this
+   * unset and the orchestrator clones the project's Git repo into a temp
+   * directory (ADR-032).
+   */
   projectRoot?: string;
   clarification?: string;
   ambiguityId?: string;
@@ -54,6 +80,11 @@ export function startOrchestratorWorker(queueConfig: QueueConfig): void {
 
 /**
  * Handles a single intent task through the full execution graph.
+ *
+ * ADR-032: the orchestrator clones the project's Git repo into a fresh
+ * temp directory for every cycle, runs the plan against that working
+ * tree, and removes it in the finally block. Any files agents write are
+ * thrown away unless a later step commits + pushes them (deploy layer).
  */
 async function handleIntentTask(
   message: TaskMessage<IntentTaskPayload>,
@@ -64,13 +95,52 @@ async function handleIntentTask(
 
   childLog.info({ intentId: payload.intentId }, 'Orchestrator received intent task');
 
-  const projectRoot = payload.projectRoot ?? process.cwd();
-  const { intents, executions } = getRepositories();
+  const { intents, projects } = getRepositories();
 
   // Build or resume execution plan
   const plan = buildExecutionPlan(correlationId, payload.intentId);
 
+  // Resolve projectRoot via Git clone unless the caller supplied one.
+  let projectRoot = payload.projectRoot ?? null;
+  let workDir: string | null = null;
+
   try {
+    if (!projectRoot) {
+      const project = await projects.findById(payload.projectId);
+      if (!project) {
+        throw new Error(
+          `Project ${payload.projectId} not found — register it first via POST /projects`,
+        );
+      }
+      const token = await projects.getCredential(project.id);
+      if (!token) {
+        throw new Error(
+          `Project ${project.name} has no Git credential on file`,
+        );
+      }
+
+      workDir = await mkdtemp(join(tmpdir(), `gestalt-cycle-${correlationId}-`));
+      const cloneUrl = authenticatedGitUrl(project.gitUrl, token);
+
+      childLog.info({ projectId: project.id, workDir }, 'Cloning project repo for cycle');
+      await simpleGit().clone(cloneUrl, workDir);
+
+      // Make sure we are on the project's default branch before agents start
+      // mutating the tree.
+      const repo = simpleGit(workDir);
+      const branches = await repo.branch();
+      if (branches.current !== project.defaultBranch) {
+        try {
+          await repo.checkout(project.defaultBranch);
+        } catch {
+          // Branch may not exist on the remote yet (brand-new repo); fall
+          // back to whatever clone landed on.
+        }
+      }
+
+      projectRoot = workDir;
+    }
+
     // Update intent status
     await intents.updateStatus(payload.intentId, 'generating');
 
@@ -107,6 +177,10 @@ async function handleIntentTask(
     childLog.error({ err }, 'Orchestrator error');
     await intents.updateStatus(payload.intentId, 'failed').catch(() => {});
     throw err;
+  } finally {
+    if (workDir) {
+      await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 }
 

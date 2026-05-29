@@ -411,3 +411,21 @@ costs multiple agent cycles.
 **Decision:** Tier 1 entries (standard library) are bundled with the platform in the `templates/` directory. The registry is called for version checking only. Air-gapped deployments never need registry access for Tier 1.
 
 **Rationale:** Tier 1 is the most critical dependency. Requiring a registry call to use the standard library would create a runtime dependency on an external service — unacceptable for air-gapped corporate deployments.
+
+---
+
+## ADR-032 — Git repository is the project filesystem
+
+**Date:** 2026-05
+**Status:** Accepted
+
+**Decision:** The server never writes generated artifacts to a developer's local machine. All artifact delivery goes through Git: the server clones the project repo, agents write files, commit, push. Developers receive changes via `git pull` or PR merge. `projectRoot` in `ContextSnapshot` is the path to the server-side clone of the project repo, resolved fresh for each intent cycle.
+
+**Rationale:** Aligns with the repo-as-source-of-truth principle. Supports multi-developer teams correctly. Makes every agent change auditable via Git history. Required for the pr-agent deploy layer to function as designed. Resolves the `ENOENT /app/HARNESS.json` blocker that surfaced once the orchestrator was wired in — the server now reads harness files from its own clone of the project repo, not from `process.cwd()`.
+
+**Consequences:**
+- New `projects` and `project_git_credentials` tables (migration `003_projects.sql`).
+- Server depends on `simple-git` for all Git operations (never `child_process.exec('git ...')`).
+- Each intent cycle does a fresh shallow-or-full clone into a temp dir, runs the plan, and removes the tree in a `finally` block.
+- Project credentials (Git PATs) are stored alongside the project record and never appear in API responses or logs. Encrypt-at-rest is deferred (see `TODO` in `repositories/projects.ts`).
+- `gestalt init` becomes a thin client over `POST /projects` + `POST /projects/:id/init-harness`. Developers run `git pull` locally to receive the harness.

@@ -153,12 +153,20 @@ gestalt login
 
 ## Part 3 — Project setup (run once per project)
 
-### Step 7 — Create a project folder
+### Step 7 — Create a project folder and Git remote
+
+Per [ADR-032](../DECISIONS.md#adr-032--git-repository-is-the-project-filesystem),
+Gestalt delivers all harness files and agent-generated code through Git. Create
+an empty repo on your Git host first (GitHub / GitLab / Azure DevOps), then:
 
 ```bash
-mkdir my-project
-cd my-project
+mkdir my-project && cd my-project
+git init
+git remote add origin https://github.com/yourorg/my-project.git
 ```
+
+You also need a personal access token (PAT) with read+write permission on the
+repo — the server uses it to clone and to push the initial harness commit.
 
 ### Step 8 — Initialise the project
 
@@ -166,15 +174,30 @@ cd my-project
 gestalt init
 ```
 
-The initializer will:
-1. Confirm your LLM connection
-2. Ask you to describe your project in natural language
-3. Extract a structured spec and confirm it with you
-4. Generate all harness files in your project folder:
-   - `AGENTS.md` — agent orientation
-   - `HARNESS.json` — project configuration
-   - `docs/ARCHITECTURE.md`, `docs/DOMAIN.md`, `docs/GOLDEN_PRINCIPLES.md`, `docs/DECISIONS.md`
-5. Validate the harness and report ready
+The wizard will prompt for:
+1. **Project name** — short identifier, e.g. `hr-portal`
+2. **Git repository URL** — the remote you created above
+3. **Default branch** — defaults to `main`
+4. **Git personal access token** — hidden input, never logged
+
+The server then:
+- Registers the project (`POST /projects`)
+- Clones the repo into a temp directory
+- Writes the harness files (`AGENTS.md`, `HARNESS.json`, `docs/ARCHITECTURE.md`,
+  `docs/DOMAIN.md`, `docs/GOLDEN_PRINCIPLES.md`, `docs/DECISIONS.md`)
+- Commits with message `chore: initialise project harness [gestalt]` and pushes
+  to the default branch
+- Cleans up the temp directory
+
+Pull the result down to your machine:
+
+```bash
+git pull   # in your local project folder
+```
+
+You now have the harness files locally. The platform will re-clone the repo on
+every subsequent `gestalt run`, so any edits you commit + push will be picked up
+on the next intent cycle.
 
 ---
 
@@ -213,7 +236,9 @@ gestalt dashboard
 | `docker-compose up -d` | Once (server) | Start the platform |
 | `gestalt init-admin` | Once (server) | Create first admin user |
 | `gestalt login` | Each machine | Authenticate the CLI |
-| `gestalt init` | Once per project | Set up a project harness |
+| `gestalt init` | Once per project | Register project + seed harness in Git |
+| `gestalt projects list` | As needed | List your registered projects |
+| `gestalt projects use <name>` | As needed | Switch the current project |
 | `gestalt run "<intent>"` | Daily | Submit work to agents |
 | `gestalt status` | Daily | Check platform and intent status |
 | `gestalt logs` | Daily | Stream live agent activity |

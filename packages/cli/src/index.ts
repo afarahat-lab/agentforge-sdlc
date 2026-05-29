@@ -6,6 +6,8 @@
  *   gestalt login [--server <url>]
  *   gestalt init
  *   gestalt init-admin [--server <url>]
+ *   gestalt projects list
+ *   gestalt projects use <name>
  *   gestalt run "<intent>" [--priority critical|high|normal|low]
  *   gestalt status [--id <correlationId>]
  *   gestalt logs [--follow] [--id <correlationId>]
@@ -16,6 +18,7 @@ import { program } from 'commander';
 import { loginCommand } from './commands/login';
 import { initCommand } from './commands/init';
 import { initAdminCommand } from './commands/init-admin';
+import { projectsListCommand, projectsUseCommand } from './commands/projects';
 import { runCommand } from './commands/run';
 import { statusCommand } from './commands/status';
 import { logsCommand, dashboardCommand } from './commands/logs';
@@ -40,6 +43,7 @@ program
 program
   .command('init')
   .description('Initialize a new project with a generated harness')
+  .allowExcessArguments(false)  // reject typos like `gestalt init local-admin`
   .action(async () => {
     await initCommand().catch(fatalError);
   });
@@ -51,6 +55,25 @@ program
   .option('--server <url>', 'Server URL', 'http://localhost:3000')
   .action(async (opts: { server: string }) => {
     await initAdminCommand(opts.server).catch(fatalError);
+  });
+
+// gestalt projects
+const projects = program
+  .command('projects')
+  .description('Manage projects registered on the server');
+
+projects
+  .command('list')
+  .description('List projects you own')
+  .action(async () => {
+    await projectsListCommand().catch(fatalError);
+  });
+
+projects
+  .command('use <name>')
+  .description('Set the current project (by name)')
+  .action(async (name: string) => {
+    await projectsUseCommand(name).catch(fatalError);
   });
 
 // gestalt run

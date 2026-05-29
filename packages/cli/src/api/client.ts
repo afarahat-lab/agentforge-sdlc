@@ -52,6 +52,15 @@ export interface SubmitIntentResponse {
   data: IntentSummary;
 }
 
+export interface ProjectRecord {
+  id: string;
+  name: string;
+  gitUrl: string;
+  defaultBranch: string;
+  createdBy: string;
+  createdAt: string;
+}
+
 export class GestaltApiClient {
   private readonly baseUrl: string;
   private token: string | null;
@@ -84,6 +93,32 @@ export class GestaltApiClient {
 
   async getMe(): Promise<{ id: string; email: string; role: string }> {
     return this.get('/auth/me');
+  }
+
+  // ─── Projects ──────────────────────────────────────────────────────────────
+
+  async createProject(params: {
+    name: string;
+    gitUrl: string;
+    defaultBranch?: string;
+    gitToken: string;
+  }): Promise<{ data: ProjectRecord }> {
+    return this.post('/projects', params);
+  }
+
+  async listProjects(): Promise<{ data: ProjectRecord[] }> {
+    return this.get('/projects');
+  }
+
+  async getProject(id: string): Promise<{ data: ProjectRecord }> {
+    return this.get(`/projects/${id}`);
+  }
+
+  async initHarness(
+    projectId: string,
+    projectDescription: string,
+  ): Promise<{ data: { committed: boolean; commitSha: string } }> {
+    return this.post(`/projects/${projectId}/init-harness`, { projectDescription });
   }
 
   // ─── Health ────────────────────────────────────────────────────────────────

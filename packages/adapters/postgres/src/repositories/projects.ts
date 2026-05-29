@@ -1,0 +1,84 @@
+/**
+ * Project repository — PostgreSQL implementation (ADR-032).
+ *
+ * One row per project in `projects`; one row per project in
+ * `project_git_credentials`, related by FK with ON DELETE CASCADE.
+ *
+ * The token is stored as plain text for the bootstrap phase.
+ * TODO: encrypt at rest before production use — wrap with libsodium or
+ * pgcrypto's `pgp_sym_encrypt` once a key-management story is decided.
+ */
+
+import type { ProjectRepository, ProjectRecord } from '@gestalt/core';
+import { getDb } from '../client';
+
+export class PostgresProjectRepository implements ProjectRepository {
+
+  async healthCheck(): Promise<boolean> {
+    const db = getDb();
+    const [{ ok }] = await db<[{ ok: number }]>`SELECT 1 AS ok`;
+    return ok === 1;
+  }
+
+  async create(
+    project: Omit<ProjectRecord, 'id' | 'createdAt'>,
+  ): Promise<ProjectRecord> {
+    const db = getDb();
+    const [row] = await db<ProjectRecord[]>`
+      INSERT INTO projects (name, git_url, default_branch, created_by)
+      VALUES (
+        ${project.name},
+        ${project.gitUrl},
+        ${project.defaultBranch},
+        ${project.createdBy}
+      )
+      RETURNING *
+    `;
+    return row;
+  }
+
+  async findById(id: string): Promise<ProjectRecord | null> {
+    const db = getDb();
+    const [row] = await db<ProjectRecord[]>`
+      SELECT * FROM projects WHERE id = ${id}
+    `;
+    return row ?? null;
+  }
+
+  async findByName(name: string): Promise<ProjectRecord | null> {
+    const db = getDb();
+    const [row] = await db<ProjectRecord[]>`
+      SELECT * FROM projects WHERE name = ${name}
+    `;
+    return row ?? null;
+  }
+
+  async list(userId: string): Promise<ProjectRecord[]> {
+    const db = getDb();
+    return db<ProjectRecord[]>`
+      SELECT * FROM projects
+      WHERE created_by = ${userId}
+      ORDER BY created_at DESC
+    `;
+  }
+
+  async saveCredential(projectId: string, token: string): Promise<void> {
+    // TODO: encrypt at rest before production use.
+    const db = getDb();
+    await db`
+      INSERT INTO project_git_credentials (project_id, token)
+      VALUES (${projectId}, ${token})
+    `;
+  }
+
+  async getCredential(projectId: string): Promise<string | null> {
+    const db = getDb();
+    const [row] = await db<{ token: string }[]>`
+      SELECT token FROM project_git_credentials
+      WHERE project_id = ${projectId}
+      ORDER BY created_at DESC
+      LIMIT 1
+    `;
+    return row?.token ?? null;
+  }
+}

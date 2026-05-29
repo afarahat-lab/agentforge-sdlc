@@ -191,6 +191,9 @@ All ADRs are in `docs/DECISIONS.md`. Key ones:
 - ADR-007: Five typed feedback signals — never generic errors
 - ADR-025: Local auth non-production only
 - ADR-026: PlatformUser is a shadow record
+- ADR-032: Git repository is the project filesystem — orchestrator clones
+  the project repo per cycle; `gestalt init` registers the project +
+  pushes the harness via the server
 
 ---
 
@@ -258,7 +261,7 @@ Next task for Claude Code:
 
 ## Current state (keep this section current)
 
-**Last updated:** 2026-05-29 (Claude Code — orchestrator worker wired)
+**Last updated:** 2026-05-29 (Claude Code — ADR-032 project registration + Git)
 
 **Repo:** https://github.com/afarahat-lab/gestalt
 
@@ -267,7 +270,8 @@ Next task for Claude Code:
 - All 12 buildable workspace packages compile clean (`pnpm -r build`)
 - `docker-compose up -d` succeeds — server, postgres, redis all `Up (healthy)`
 - Database migrations apply on startup — `users`, `local_auth`, `audit_log`,
-  etc. all created; `schema_migrations` tracks `001_initial` + `002_local_auth`
+  `projects`, `project_git_credentials`, etc. all created; `schema_migrations`
+  tracks `001_initial`, `002_local_auth`, and `003_projects`
 - Server reachable on http://localhost:3000 — `/health` returns 200
 - Auth middleware active — protected routes return 401
 - First-boot bootstrap verified end-to-end with curl: `POST /auth/admin/setup`
@@ -278,12 +282,16 @@ Next task for Claude Code:
   stored in `~/.gestalt/config.json`
 - `POST /intents` (which `gestalt run` calls) accepted and BullMQ-queued.
   Job lands at `bull:gestalt-generate:*` in Redis. The generate-layer
-  orchestrator worker is now registered at server startup (step 6 in
-  `server.ts`) and consumes the queue with concurrency 3 — submitted
-  intents no longer sit in `generating` forever; they transition to
-  `failed` (and now have an `agent_executions` row + signals on the intent
-  detail) when the orchestrator can't reach project context (see the
-  next bullet)
+  orchestrator worker is registered at server startup (step 6 in
+  `server.ts`) and consumes the queue with concurrency 3
+- Project registration + Git delivery (ADR-032) is wired end-to-end:
+  `POST /projects` registers a project (name + Git URL + PAT, token
+  stored in `project_git_credentials` and never echoed in responses);
+  `POST /projects/:id/init-harness` clones the repo into a temp dir,
+  writes harness files, commits, pushes, and cleans up the temp dir in a
+  `finally` block; the orchestrator clones fresh per intent cycle and
+  drives the plan against that working tree. `gestalt init` is now a thin
+  client over those endpoints — no local file writes
 - `GET /status`, `GET /status/agents`, `GET /intents`, `GET /intents/:id`
   all return 200 (verified with curl). Previously `/status` and intent
   detail returned 500 because `executions`, `artifacts`, and `signals`
@@ -318,6 +326,9 @@ Next task for Claude Code:
 - `audit`       — append-only, query with filters
 - `users`       — upsert, findById, findByIdpSubject, list, count
 - `localAuth`   — create, findByEmail
+- `projects`    — create, findById, findByName, list, saveCredential,
+  getCredential (token stored in `project_git_credentials`, never
+  returned by routes; encrypt-at-rest is a documented TODO)
 
 **CLI install:**
 - `@gestalt/cli` is private — not on npm
@@ -339,28 +350,19 @@ Next task for Claude Code:
   explicitly sets `allowedInProduction: true`
 
 **Pending enhancements (design in chat first):**
-- **Project file delivery to the server.** The orchestrator calls
-  `HarnessEngine(projectRoot).buildSnapshot()` and needs `HARNESS.json`,
-  `AGENTS.md`, `docs/ARCHITECTURE.md`, `docs/DOMAIN.md`,
-  `docs/GOLDEN_PRINCIPLES.md`, `docs/DECISIONS.md` on disk at `projectRoot`.
-  Today `projectRoot` defaults to `process.cwd()` (= `/app` in the Docker
-  container) which has none of those files, so every intent fails at the
-  context-assembler step with `ENOENT: …/HARNESS.json`. Three plausible
-  paths: (a) CLI uploads the project bundle to a `/projects/:projectId/files`
-  endpoint that lands them in the `projects_data` volume mounted at
-  `/app/projects`; (b) volume-mount the developer's project folder into the
-  server container at runtime; (c) store project context in the DB and have
-  the orchestrator read from there instead of disk. (a) is closest to how
-  the rest of the platform works
+- **Encrypt Git PATs at rest.** `project_git_credentials.token` is plain
+  text today; documented `TODO` in `repositories/projects.ts`. Pick a
+  key-management story (pgcrypto `pgp_sym_encrypt` with a server-side
+  master key, or libsodium with a separately-mounted key file) before any
+  shared use of the platform
 - **LLM model name validation.** `loadConfig` accepts any non-empty string
   for `LLM_MODEL`; e.g. `gpt-5.3-codex` (operator's local value) is not a
-  real OpenAI model and would 404 if the file-delivery gap is solved.
-  Worth adding a startup-time ping or at least a clear error path
+  real OpenAI model and would 404 once the platform starts driving real
+  LLM calls. Worth adding a startup-time ping or at least a clear error
+  path
 - Non-interactive mode for `gestalt init-admin` (CLI flags or stdin JSON) so
   it can be scripted. Current implementation is TTY-only by design of
   `promptSecret`
-- `init` command should reject extra positionals so `gestalt init local-admin`
-  fails fast instead of running the project wizard with the arg ignored
 
 **Known architectural constraints Claude Code must respect:**
 - pnpm 9.x only (Node 20 compatibility)
@@ -844,3 +846,161 @@ Next-step blocker (for operator awareness, not this session):
   '/app/HARNESS.json'` in `docker-compose logs server`. Cause: the server
   cannot see the project's harness files. Resolution path is a design
   decision; do not just stub a HARNESS.json into the image
+
+---
+
+### Session 2026-05-29 — Claude Code (ADR-032 project registration + Git)
+
+Implemented the ADR-032 design: the server is the only thing that touches
+the project's Git repo. `gestalt init` now registers a project + has the
+server push the harness; subsequent intent cycles clone fresh per run.
+Resolves the `ENOENT /app/HARNESS.json` blocker.
+
+Changed:
+- `packages/adapters/postgres/src/migrations/003_projects.sql` (new):
+  `projects` table (id, name UNIQUE, git_url, default_branch, created_by
+  FK users, created_at) and `project_git_credentials` table (project_id
+  FK ON DELETE CASCADE, token, created_at). Pure schema only — no
+  `CREATE TABLE schema_migrations` / `INSERT` writes (runner owns those,
+  per 2026-05-29 bootstrap-fix convention)
+- `packages/core/src/repository/index.ts`: added `ProjectRecord` type and
+  `ProjectRepository` interface (create / findById / findByName / list /
+  saveCredential / getCredential); added `projects: ProjectRepository` to
+  `RepositoryRegistry`. `packages/core/src/index.ts` re-exports both
+- `packages/adapters/postgres/src/repositories/projects.ts` (new):
+  `PostgresProjectRepository` implementing the full interface. Token
+  stored plain; `TODO: encrypt at rest before production use` comment
+  inline. `getCredential` returns the most recent row (allows future PAT
+  rotation without schema change)
+- `packages/adapters/postgres/src/index.ts`: wired `PostgresProjectRepository`
+  into `createPostgresAdapter`
+- `packages/adapters/oracle/{package.json, src/index.ts,
+  src/repositories/projects.ts}` (new repo + dep): `OracleProjectRepository`
+  class — every method throws `not implemented`. Added `@gestalt/core`
+  dependency + `typescript` / `@types/node` so the adapter now builds (was
+  a 1-line comment stub before). Same shape for `mssql`
+- `packages/server/package.json`: added `"simple-git": "^3.23.0"` runtime
+  dep. `packages/server/Dockerfile` production stage now `apk add --no-cache
+  git openssh-client` — simple-git shells out to the `git` binary and
+  `node:20-alpine` does not ship it (caught at smoke-test time)
+- `packages/server/src/routes/projects.ts` (new): four routes — `POST
+  /projects` (requireRole operator; validates unique name; creates +
+  saveCredential + audit record `action: 'project.created'`; returns
+  `toPublic(project)` which strips nothing today but documents the
+  "never include credentials" contract); `GET /projects` (lists by
+  `request.user.id`); `GET /projects/:id` (detail, 404 on miss); `POST
+  /projects/:id/init-harness` (mkdtemp under `os.tmpdir()`, clone via
+  `simpleGit().clone()` with the token embedded as
+  `https://x-access-token:<TOKEN>@host/...`, switch to defaultBranch,
+  write six harness files inline, `addConfig user.name/user.email`,
+  `add . && commit && push origin defaultBranch`, audit record
+  `action: 'project.harness-initialised'`, `finally { rm(workDir,
+  recursive, force) }`). All errors surface to the operator with
+  `details: err.message` — the cloneUrl (which carries the token) is
+  never logged or returned
+- `packages/server/src/app.ts`: registered `registerProjectRoutes` after
+  intent routes
+- `packages/agents/generate/package.json`: added `simple-git` dep
+- `packages/agents/generate/src/orchestrator/orchestrator.ts`: rewrote
+  `handleIntentTask` per ADR-032. Looks up the project by `payload.projectId`,
+  reads the credential, mkdtemp + clone fresh per cycle, checkouts the
+  default branch, sets `projectRoot` to the clone path, runs `drivePlan`
+  as before, removes the temp dir in `finally`. `payload.projectRoot` is
+  still honored when set (reserved for resume / clarification flows that
+  already have a working tree)
+- `packages/cli/src/api/client.ts`: added `createProject` / `listProjects`
+  / `getProject` / `initHarness` typed wrappers + `ProjectRecord` type
+- `packages/cli/src/commands/init.ts`: replaced the mocked four-phase
+  wizard with the real Git-first flow — Phase 0 (server health), Phase 0.5
+  (project registration: name / gitUrl / defaultBranch / hidden gitToken),
+  Phase 1 (project description), Phase 2 (server clones + writes +
+  commits + pushes), Phase 3 (GET /projects/:id confirms). Prints
+  `Run: git pull` as the operator's next step. Stores `currentProjectId`
+  in `~/.gestalt/config.json`
+- `packages/cli/src/commands/projects.ts` (new): `projectsListCommand`
+  (table with current-project marker) and `projectsUseCommand` (find by
+  name in the user's list, persist the id locally)
+- `packages/cli/src/index.ts`: registered `gestalt projects list` and
+  `gestalt projects use <name>` under a `projects` parent command. Added
+  `.allowExcessArguments(false)` on `init` so `gestalt init local-admin`
+  (the old broken syntax) now exits with a clear error instead of silently
+  running the wizard with the arg ignored
+- `docs/DECISIONS.md`: appended **ADR-032 — Git repository is the project
+  filesystem** with the full decision, rationale, and consequences
+  (migration, simple-git constraint, per-cycle clone, credential
+  confidentiality, CLI shape)
+- `docs/guides/quick-start.md`: rewrote Steps 7-8 for the Git-first flow.
+  Step 7 now describes creating the empty Git repo and a PAT; Step 8 is
+  the new four-prompt `gestalt init` wizard and a `git pull` to receive
+  the harness. Command reference table grew two `gestalt projects` rows
+
+Verified:
+- `pnpm -r build` — all 12 buildable packages compile clean
+- `docker-compose down -v` then `up -d --build` — three migrations apply
+  on first start (`001_initial`, `002_local_auth`, `003_projects`);
+  orchestrator worker registers; server `Up (healthy)`
+- `POST /projects` happy path returns 201 with the public record; missing
+  fields → 400; duplicate name → 409 with code `PROJECT_NAME_TAKEN`;
+  `GET /projects` lists the row; `grep` against responses confirms the
+  token never appears in `/projects` or `/projects/:id` payloads
+- `POST /projects/:id/init-harness` against a fake URL returns 500 with
+  `details` set to a real Git error ("Authentication failed for
+  'https://github.com/test/example.git/'") — proves simple-git is
+  invoking the real binary, the token-embedded URL is well-formed, and
+  the `finally` cleanup removed the temp dir
+- `git --version` inside the server container reports `git version 2.52.0`
+  — the Dockerfile `apk add` succeeded
+- `docker-compose exec server ls /tmp | grep gestalt-init` is empty after
+  the failed init-harness call (no orphan temp dirs)
+
+Decisions made:
+- **Inlined harness file content** in `routes/projects.ts` (`buildAgentsMd`,
+  `buildHarnessJson`, etc.) rather than reading from `templates/`. The
+  Dockerfile does not copy `templates/` into the image and shipping a
+  template package the server depends on is over-engineering for the
+  six-file Tier 1 case today. When a richer template story exists
+  (multi-tier, branch-per-template), move these into a templates package
+- **`x-access-token` URL-embedded PAT** in both the server route and the
+  orchestrator (one helper each — same shape). GitHub / GitLab / Azure
+  DevOps all accept this. SSH URLs pass through unchanged; if anyone
+  registers an SSH URL, simple-git will use the container's SSH key,
+  which is out of scope today
+- **Per-cycle clone** rather than persistent working trees. Stateless,
+  cleaner failure recovery, no risk of one cycle's mutations bleeding
+  into another. Cost is bandwidth — acceptable today; if it becomes
+  expensive, switch to shallow clones (`--depth 1`) at the simple-git
+  call site
+- **`getCredential` returns the most recent row by `created_at DESC LIMIT
+  1`.** Allows token rotation by inserting a new row without a schema
+  change. Old rows stay for audit purposes
+- **Orphan-stub adapters now build.** Added `@gestalt/core` dep and
+  TypeScript devDeps to `oracle` and `mssql` so the new
+  `repositories/projects.ts` files type-check. They were 1-line comment
+  files before and never participated in `pnpm -r build` — they do now,
+  which means the "adding a method to ProjectRepository forces parity"
+  invariant from **Known issues** actually fires (build break vs. silent
+  divergence)
+- **Did not add SSH client key generation or known_hosts seeding.**
+  Operators choosing HTTPS+PAT (the documented path) are unaffected. SSH
+  is a future operational story
+- **CLI prints `Commit: <sha>` and a manual `git pull` instruction** as
+  Phase 2 output. We do not run git locally on the operator's machine —
+  the CLI never assumes there is a working tree at `cwd` for the project
+  being registered. Operator is in control of the pull
+
+Operator caveats:
+- The smoke test left one admin (`adr032@example.com`, password
+  `adr-032-test`) and one project (`smoke-proj` with a fake Git URL) in
+  the DB. `docker-compose down -v` before real use
+- `LLM_MODEL=gpt-5.3-codex` in the local `.env` is still bogus — once
+  intents start exercising the LLM (real project, real PAT, valid repo),
+  the first LLM call will 404. Flag carried forward under **Pending
+  enhancements**
+
+Build status:
+- `pnpm -r build` — all 12 buildable packages compile clean
+- `docker-compose up -d --build` — server, postgres, redis all `Up
+  (healthy)`; orchestrator worker running; three migrations applied
+- ADR-032 end-to-end happy-path verified through `gestalt init` ↔
+  `/projects/:id/init-harness` ↔ `simple-git push` (failure mode against
+  fake PAT confirms the real flow)

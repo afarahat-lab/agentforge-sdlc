@@ -21,7 +21,8 @@
     "@gestalt/core": "workspace:*",
     "bcrypt": "^5.1.1",
     "fastify": "^4.27.0",
-    "jose": "^5.2.0"
+    "jose": "^5.2.0",
+    "simple-git": "^3.23.0"
   },
   "devDependencies": {
     "@types/bcrypt": "^5.0.2",

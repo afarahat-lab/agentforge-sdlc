@@ -15,6 +15,7 @@ import { PostgresLocalAuthRepository } from './repositories/local-auth';
 import { PostgresAgentExecutionRepository } from './repositories/executions';
 import { PostgresArtifactRepository } from './repositories/artifacts';
 import { PostgresSignalRepository } from './repositories/signals';
+import { PostgresProjectRepository } from './repositories/projects';
 import { runMigrations } from './migrations/runner';
 
 export { closeDb, pingDb };
@@ -38,5 +39,6 @@ export async function createPostgresAdapter(databaseUrl: string): Promise<Reposi
     audit:      new PostgresAuditRepository(),
     users:      new PostgresUserRepository(),
     localAuth:  new PostgresLocalAuthRepository(),
+    projects:   new PostgresProjectRepository(),
   };
 }

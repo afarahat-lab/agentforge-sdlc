@@ -12,5 +12,12 @@
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@gestalt/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
   }
 }

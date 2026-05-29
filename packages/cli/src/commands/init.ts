@@ -1,86 +1,112 @@
 /**
- * gestalt init — four-phase harness initializer.
+ * gestalt init — four-phase project initialiser (ADR-032).
  *
- * Phase 0: LLM bootstrap (configure provider, test connection)
- * Phase 1: Intent capture (natural language description → structured spec)
- * Phase 2: Harness generation (generate all context files from spec)
- * Phase 3: Harness validation (verify completeness, report ready)
+ * Phase 0:   Verify server reachability and the operator is signed in
+ * Phase 0.5: Register the project (name + Git URL + token)
+ * Phase 1:   Capture the project description
+ * Phase 2:   Server clones the repo, writes harness files, commits, pushes
+ * Phase 3:   Confirm the project record from the server
+ *
+ * No files are written to the developer's local machine. The harness lands
+ * in the Git repo; the developer pulls it down.
  */
 
-import { writeFile, mkdir } from 'fs/promises';
-import { join } from 'path';
+import { GestaltApiClient, ApiClientError } from '../api/client';
 import { loadCliConfig, updateCliConfig } from '../ui/config';
 import {
-  c, blank, divider, printBanner, createSpinner,
-  prompt, promptSecret, confirm, select,
+  c, blank, divider, createSpinner,
+  prompt, promptSecret,
 } from '../ui/prompts';
 
-const LLM_PROVIDERS = [
-  { label: 'Azure OpenAI (recommended for corporate environments)', value: 'azure-openai' },
-  { label: 'Ollama (local, no API key required)', value: 'ollama' },
-  { label: 'vLLM (self-hosted)', value: 'vllm' },
-  { label: 'Other OpenAI-compatible endpoint', value: 'openai-compatible' },
-];
-
-const PROVIDER_DEFAULTS: Record<string, { baseUrl: string; model: string }> = {
-  'azure-openai': { baseUrl: 'https://<resource>.openai.azure.com/openai/deployments/<deployment>', model: 'gpt-4o' },
-  'ollama':       { baseUrl: 'http://localhost:11434/v1', model: 'llama3' },
-  'vllm':         { baseUrl: 'http://localhost:8000/v1', model: '' },
-  'openai-compatible': { baseUrl: '', model: '' },
-};
-
 export async function initCommand(): Promise<void> {
-  printBanner();
+  blank();
   console.log(c.title('Welcome to Gestalt.'));
-  console.log(c.dim('We\'ll set up your project in four phases.'));
+  console.log(c.dim('We will register your project and seed its harness in Git.'));
   blank();
 
   const config = await loadCliConfig();
 
-  // ─── Phase 0 — LLM bootstrap ───────────────────────────────────────────────
+  if (!config.token) {
+    console.log(c.error('Not signed in. Run `gestalt login` (or `gestalt init-admin` on a fresh platform) first.'));
+    process.exit(1);
+  }
 
-  console.log(c.info('Phase 0 — LLM Provider'));
+  const client = new GestaltApiClient({ serverUrl: config.serverUrl, token: config.token });
+
+  // ─── Phase 0 — Server health ───────────────────────────────────────────────
+
+  console.log(c.info('Phase 0 — Server'));
   divider();
-  console.log('Before we begin, we need to connect to your LLM provider.');
+
+  const healthSpinner = createSpinner('Checking server...');
+  healthSpinner.start();
+  try {
+    await client.health();
+    healthSpinner.succeed(c.success(`Server reachable (${config.serverUrl})`));
+  } catch {
+    healthSpinner.fail(c.error(`Cannot reach server at ${config.serverUrl}`));
+    console.log(c.dim('Check that the Gestalt server is running: docker-compose ps'));
+    process.exit(1);
+  }
   blank();
 
-  const providerType = await select('Provider type', LLM_PROVIDERS);
-  const defaults = PROVIDER_DEFAULTS[providerType];
+  // ─── Phase 0.5 — Project registration ──────────────────────────────────────
 
-  let baseUrl = await prompt(`Endpoint URL [${defaults.baseUrl || 'required'}]`);
-  if (!baseUrl && defaults.baseUrl && !defaults.baseUrl.includes('<')) {
-    baseUrl = defaults.baseUrl;
+  console.log(c.info('Phase 0.5 — Project Registration'));
+  divider();
+  console.log('The server will clone your Git repo, write the harness files,');
+  console.log('commit, and push to the default branch. Make sure the repo exists');
+  console.log('on the remote and the token has read+write access.');
+  blank();
+
+  const name = await prompt('Project name (short identifier, e.g. hr-portal)');
+  if (!name) {
+    console.log(c.error('Project name is required.'));
+    process.exit(1);
   }
 
-  if (providerType !== 'ollama') {
-    await promptSecret('API Key');
+  const gitUrl = await prompt('Git repository URL (the server will clone and push to this)');
+  if (!gitUrl) {
+    console.log(c.error('Git URL is required.'));
+    process.exit(1);
   }
 
-  let model = await prompt(`Model name [${defaults.model || 'required'}]`);
-  if (!model && defaults.model) model = defaults.model;
+  const branchInput = await prompt('Default branch [main]');
+  const defaultBranch = branchInput || 'main';
 
-  // Test connection
-  const llmSpinner = createSpinner('Testing LLM connection...');
-  llmSpinner.start();
-
-  try {
-    // Write env to a temp .env.llm file for the server to validate
-    // In production, the server validates this on our behalf
-    await new Promise((r) => setTimeout(r, 1000));  // simulate test
-    llmSpinner.succeed(c.success(`Connected (${model})`));
-  } catch (err) {
-    llmSpinner.fail(c.error(`Connection failed: ${err instanceof Error ? err.message : String(err)}`));
+  const gitToken = await promptSecret('Git personal access token (needs repo read/write)');
+  if (!gitToken) {
+    console.log(c.error('Git token is required.'));
     process.exit(1);
   }
 
   blank();
+  const registerSpinner = createSpinner('Registering project...');
+  registerSpinner.start();
 
-  // ─── Phase 1 — Intent capture ──────────────────────────────────────────────
+  let projectId: string;
+  try {
+    const { data: project } = await client.createProject({ name, gitUrl, defaultBranch, gitToken });
+    projectId = project.id;
+    registerSpinner.succeed(c.success(`Project registered: ${project.name}`));
+    await updateCliConfig({ currentProjectId: projectId });
+  } catch (err) {
+    registerSpinner.stop();
+    if (err instanceof ApiClientError && err.status === 409) {
+      console.log(c.error(`A project named '${name}' already exists. Pick a different name or run \`gestalt projects use ${name}\`.`));
+    } else {
+      console.log(c.error(`Registration failed: ${err instanceof Error ? err.message : String(err)}`));
+    }
+    process.exit(1);
+  }
+  blank();
+
+  // ─── Phase 1 — Project description ─────────────────────────────────────────
 
   console.log(c.info('Phase 1 — Project Description'));
   divider();
   console.log('Describe your project in your own words.');
-  console.log(c.dim('What are you building, who will use it, and what problem does it solve?'));
+  console.log(c.dim('What are you building, who will use it, what problem does it solve?'));
   blank();
 
   const description = await prompt('Your description');
@@ -88,77 +114,34 @@ export async function initCommand(): Promise<void> {
     console.log(c.error('Description is required.'));
     process.exit(1);
   }
-
-  blank();
-  const extractSpinner = createSpinner('Analysing your project description...');
-  extractSpinner.start();
-
-  // Simulate LLM extraction (real call in Phase 2 build)
-  await new Promise((r) => setTimeout(r, 1500));
-  extractSpinner.succeed('Analysis complete');
   blank();
 
-  // Mock extracted spec for now — real LLM call replaces this
-  const extractedSpec = {
-    projectName: description.split(' ').slice(0, 3).join(' '),
-    purpose: description,
-    frontend: 'React web',
-    backend: 'TypeScript / Node.js',
-    database: 'PostgreSQL',
-    architectureStyle: 'Modular monolith',
-    compliance: [],
-  };
-
-  console.log(c.bold('Here\'s what I understood about your project:'));
-  blank();
-  Object.entries(extractedSpec).forEach(([key, value]) => {
-    const label = key.replace(/([A-Z])/g, ' $1').toLowerCase().padEnd(22);
-    const val = Array.isArray(value) ? (value.length ? value.join(', ') : 'none') : String(value);
-    console.log(`  ${c.dim(label)} ${val}`);
-  });
-  blank();
-
-  const confirmed = await confirm('Does this look right?', true);
-  if (!confirmed) {
-    console.log(c.dim('Please re-run `gestalt init` and update your description.'));
-    process.exit(0);
-  }
-
-  blank();
-
-  // ─── Phase 2 — Harness generation ─────────────────────────────────────────
+  // ─── Phase 2 — Harness generation (server-side) ───────────────────────────
 
   console.log(c.info('Phase 2 — Harness Generation'));
   divider();
 
-  const genSpinner = createSpinner('Generating your project harness...');
+  const genSpinner = createSpinner('Server cloning repo and writing harness files...');
   genSpinner.start();
 
-  // Generate core harness files
-  const harnessFiles: Record<string, string> = {
-    'AGENTS.md': buildAgentsMd(extractedSpec),
-    'HARNESS.json': buildHarnessJson(extractedSpec, { providerType, baseUrl, model }),
-    'docs/ARCHITECTURE.md': buildArchitectureMd(extractedSpec),
-    'docs/DOMAIN.md': buildDomainMd(extractedSpec),
-    'docs/GOLDEN_PRINCIPLES.md': buildGoldenPrinciplesMd(),
-    'docs/DECISIONS.md': buildDecisionsMd(extractedSpec),
-  };
-
-  for (const [relativePath, content] of Object.entries(harnessFiles)) {
-    const fullPath = join(process.cwd(), relativePath);
-    await mkdir(join(process.cwd(), relativePath, '..'), { recursive: true });
-    await writeFile(fullPath, content, 'utf8');
-    genSpinner.text = `Generating ${relativePath}...`;
-    await new Promise((r) => setTimeout(r, 200));
+  let commitSha = '';
+  try {
+    const { data } = await client.initHarness(projectId, description);
+    commitSha = data.commitSha;
+    genSpinner.succeed(c.success(`Harness committed to ${gitUrl}`));
+  } catch (err) {
+    genSpinner.fail(c.error(`Harness init failed: ${err instanceof Error ? err.message : String(err)}`));
+    process.exit(1);
   }
 
-  genSpinner.succeed('Harness generated');
   blank();
-
-  // List generated files
-  Object.keys(harnessFiles).forEach((f) => {
-    console.log(`  ${c.success('✓')} ${f}`);
-  });
+  console.log(c.dim(`Commit: ${commitSha}`));
+  blank();
+  console.log('Run the following in your local project folder:');
+  blank();
+  console.log(`  ${c.bold('git pull')}`);
+  blank();
+  console.log('This pulls the generated harness files to your local machine.');
   blank();
 
   // ─── Phase 3 — Validation ──────────────────────────────────────────────────
@@ -166,189 +149,32 @@ export async function initCommand(): Promise<void> {
   console.log(c.info('Phase 3 — Validation'));
   divider();
 
-  const validateSpinner = createSpinner('Validating harness...');
+  const validateSpinner = createSpinner('Confirming project record...');
   validateSpinner.start();
-  await new Promise((r) => setTimeout(r, 800));
+  try {
+    await client.getProject(projectId);
+    validateSpinner.stop();
+  } catch (err) {
+    validateSpinner.fail(c.error(`Validation failed: ${err instanceof Error ? err.message : String(err)}`));
+    process.exit(1);
+  }
 
-  // Check all required files exist
   const checks = [
-    'All required context files present',
-    'HARNESS.json schema valid',
-    'LLM connection verified',
-    'No CONTEXT_GAP signals',
+    'Project registered on the server',
+    'Harness committed to the project repo',
+    `Default branch: ${defaultBranch}`,
+    `Current project set: ${name}`,
   ];
-
-  validateSpinner.stop();
   checks.forEach((check) => {
     console.log(`  ${c.success('✓')} ${check}`);
   });
 
   blank();
   divider();
-  console.log(c.success('✓ Harness ready. Your project is set up.'));
+  console.log(c.success('✓ Project ready.'));
   blank();
-  console.log('Next step:');
-  console.log(`  ${c.bold('gestalt run')} ${c.dim('"Set up the initial project scaffold"')}`);
+  console.log('Next steps:');
+  console.log(`  ${c.bold('git pull')}                                        ${c.dim('# locally, in your project folder')}`);
+  console.log(`  ${c.bold('gestalt run')} ${c.dim('"Set up the initial scaffold"')}`);
   blank();
-  console.log(`Dashboard: ${c.info(config.serverUrl)}`);
-  blank();
-
-  // Save project config
-  await updateCliConfig({
-    serverUrl: config.serverUrl,
-    currentProjectId: extractedSpec.projectName.replace(/\s+/g, '-').toLowerCase(),
-  });
-}
-
-// ─── Harness file builders ─────────────────────────────────────────────────────
-
-function buildAgentsMd(spec: Record<string, unknown>): string {
-  return `# AGENTS.md
-
-This file is the primary agent orientation document for this project.
-Read this file completely before taking any action.
-
-## What this project is
-
-${spec.purpose}
-
-## Stack
-
-| Layer | Technology |
-|---|---|
-| Frontend | ${spec.frontend} |
-| Backend | ${spec.backend} |
-| Database | ${spec.database} |
-| Architecture | ${spec.architectureStyle} |
-
-## Architecture rules
-
-1. Modules never import from each other's internals — only from index.ts exports
-2. All database access through repository pattern
-3. Every state-changing operation produces an audit record
-4. RBAC enforced at middleware, never inline
-
-## When context is missing
-
-Emit a \`CONTEXT_GAP\` signal with the specific missing information identified.
-`;
-}
-
-function buildHarnessJson(
-  spec: Record<string, unknown>,
-  llm: { providerType: string; baseUrl: string; model: string },
-): string {
-  const config = {
-    name: String(spec.projectName).replace(/\s+/g, '-').toLowerCase(),
-    version: '0.1.0',
-    tier: 'tier1',
-    templateId: 'corporate-ops-web-mobile',
-    stack: {
-      language: 'typescript',
-      runtime: 'node20',
-      packageManager: 'pnpm',
-      frontend: String(spec.frontend),
-      backend: String(spec.backend),
-      database: String(spec.database),
-      architectureStyle: String(spec.architectureStyle),
-    },
-    adapters: {
-      database: { type: 'postgres', configKey: 'DATABASE_URL' },
-      queue: { type: 'bullmq', configKey: 'REDIS_URL' },
-      llm: { type: llm.providerType, baseUrl: llm.baseUrl, model: llm.model },
-    },
-    qualityGate: {
-      required: ['lint', 'typecheck', 'unit-tests', 'constraint-check', 'security-scan'],
-      blockingSignals: ['GOLDEN_PRINCIPLE_BREACH', 'CONSTRAINT_VIOLATION'],
-      autoResolvableSignals: ['LINT_FAILURE', 'TEST_FAILURE'],
-      maxRetries: 3,
-    },
-    maintenance: {
-      driftCheck: { enabled: true, scheduleUtc: '0 2 * * *' },
-      alignmentCheck: { enabled: true, scheduleUtc: '0 3 * * *' },
-      gcCheck: { enabled: true, scheduleUtc: '0 4 * * 5' },
-    },
-    identity: {
-      providers: [{ type: 'local', enabled: true, warningBanner: true, allowedInProduction: false }],
-      roleMapping: [],
-      defaultRole: null,
-      sessionTtlMinutes: 480,
-    },
-  };
-  return JSON.stringify(config, null, 2);
-}
-
-function buildArchitectureMd(spec: Record<string, unknown>): string {
-  return `# Architecture
-
-## Style: ${spec.architectureStyle}
-
-## Layer structure
-
-\`\`\`
-src/
-├── modules/          # business domain modules
-├── shared/           # cross-cutting concerns
-│   ├── db/           # repository implementations
-│   ├── auth/         # authentication + RBAC
-│   └── utils/        # shared utilities
-└── api/              # route registration
-\`\`\`
-
-## Dependency rules
-
-- Modules may only import from each other's index.ts
-- All database access through src/shared/db/ repositories
-- No circular dependencies
-- No direct DB calls outside repository classes
-`;
-}
-
-function buildDomainMd(spec: Record<string, unknown>): string {
-  return `# Domain Model
-
-## Project purpose
-
-${spec.purpose}
-
-## Core entities
-
-- User — platform user with role and permissions
-- Organisation — tenant unit
-- AuditLog — immutable operation record
-- Notification — user notification
-
-## Bounded contexts
-
-To be populated by agents as the domain model evolves.
-`;
-}
-
-function buildGoldenPrinciplesMd(): string {
-  return `# Golden Principles
-
-These invariants are non-negotiable. Violations require human review.
-
-## GP-001 — Every state-changing operation produces an audit record
-
-## GP-002 — RBAC enforced at middleware, never inline
-
-## GP-003 — Input validated at API boundary with Zod
-
-## GP-004 — No sensitive data in logs
-`;
-}
-
-function buildDecisionsMd(spec: Record<string, unknown>): string {
-  return `# Architecture Decisions
-
-## ADR-001 — Project initialisation
-
-Date: ${new Date().toISOString().split('T')[0]}
-Status: Accepted
-
-Decision: Project initialised with Gestalt harness initializer.
-Stack: ${spec.frontend} / ${spec.backend} / ${spec.database}
-Architecture: ${spec.architectureStyle}
-`;
 }

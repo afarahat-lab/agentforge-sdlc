@@ -152,6 +152,29 @@ export interface LocalAuthRepository extends BaseRepository {
   findByEmail(email: string): Promise<LocalAuthRecord | null>;
 }
 
+// ─── Project repository (ADR-032 — Git is the project filesystem) ─────────────
+
+export interface ProjectRecord {
+  id: string;
+  name: string;            // short identifier, unique platform-wide
+  gitUrl: string;          // clone URL the server uses for every intent cycle
+  defaultBranch: string;   // typically 'main'
+  createdBy: string;       // users.id
+  createdAt: Date;
+}
+
+export interface ProjectRepository extends BaseRepository {
+  create(project: Omit<ProjectRecord, 'id' | 'createdAt'>): Promise<ProjectRecord>;
+  findById(id: string): Promise<ProjectRecord | null>;
+  findByName(name: string): Promise<ProjectRecord | null>;
+  list(userId: string): Promise<ProjectRecord[]>;
+
+  // Credentials are stored alongside but exposed only by id —
+  // the token never appears in API responses (see routes/projects.ts).
+  saveCredential(projectId: string, token: string): Promise<void>;
+  getCredential(projectId: string): Promise<string | null>;
+}
+
 // ─── Repository registry ──────────────────────────────────────────────────────
 
 /**
@@ -167,6 +190,7 @@ export interface RepositoryRegistry {
   audit: AuditRepository;
   users: UserRepository;
   localAuth: LocalAuthRepository;
+  projects: ProjectRepository;
 }
 
 let _registry: RepositoryRegistry | null = null;

@@ -37,10 +37,12 @@ export type {
   AuditRecord,
   UserRecord,
   LocalAuthRecord,
+  ProjectRecord,
   RepositoryRegistry,
   IntentRepository, AgentExecutionRepository,
   ArtifactRepository, SignalRepository,
   AuditRepository, UserRepository, LocalAuthRepository,
+  ProjectRepository,
 } from './repository/index';
 export { getRepositories, setRepositories } from './repository/index';
 
