@@ -45,14 +45,8 @@ export async function registerOversightRoutes(app: FastifyInstance): Promise<voi
 
   // Note: GET /events is registered by routes/events.ts (the canonical SSE endpoint)
 
-  // GET /maintenance/runs
-  app.get('/maintenance/runs', async (_req, _reply) => {
-    throw new Error('GET /maintenance/runs not yet implemented');
-  });
-
-  // POST /maintenance/trigger
-  app.post('/maintenance/trigger', async (_req, _reply) => {
-    throw new Error('POST /maintenance/trigger not yet implemented');
-  });
+  // /maintenance/runs and /maintenance/trigger are registered by
+  // routes/maintenance.ts (the canonical maintenance endpoints,
+  // ADR-035). This block previously held aspirational stubs for them.
 }
 

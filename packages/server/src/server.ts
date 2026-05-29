@@ -10,8 +10,9 @@
  *   6. Start generate-layer orchestrator worker
  *   7. Start quality-gate worker
  *   8. Start deploy worker
- *   9. Create and start Fastify app
- *   10. Register graceful shutdown
+ *   9. Start maintenance scheduler (node-cron schedules in-process)
+ *   10. Create and start Fastify app
+ *   11. Register graceful shutdown
  */
 
 import { loadConfig, createLLMClient, setRepositories, createContextLogger } from '@gestalt/core';
@@ -19,6 +20,7 @@ import { createPostgresAdapter, closeDb } from '@gestalt/adapter-postgres';
 import { startOrchestratorWorker } from '@gestalt/agents-generate';
 import { startGateWorker } from '@gestalt/agents-quality-gate';
 import { startDeployWorker } from '@gestalt/agents-deploy';
+import { startMaintenanceScheduler } from '@gestalt/agents-maintenance';
 import { createApp } from './app';
 import { createAuthManager } from './auth/auth-manager';
 import { loadIdentityConfig } from './auth/config-loader';
@@ -69,7 +71,11 @@ export async function startServer(): Promise<void> {
   startDeployWorker(config.queue);
   log.info('Deploy worker started');
 
-  // 9. Fastify app
+  // 9. Maintenance scheduler (4 node-cron schedules in-process)
+  startMaintenanceScheduler({ queueConfig: config.queue });
+  log.info('Maintenance scheduler started');
+
+  // 10. Fastify app
   const app = await createApp(config, authManager);
 
   await app.listen({

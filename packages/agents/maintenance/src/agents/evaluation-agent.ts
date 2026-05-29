@@ -1,174 +1,211 @@
 /**
- * Evaluation agent — analyses runtime metrics and queues intents when
- * production health degrades beyond configured thresholds.
+ * Evaluation agent — polls the project's monitoring system and queues
+ * a `PERFORMANCE_DEGRADATION` or `SECURITY_FINDING` intent when a
+ * configured threshold is breached.
  *
- * Trigger: continuous — runs whenever monitoring metrics are available.
- * Not schedule-based like the other maintenance agents.
+ * Schedule: every 15 minutes (overridable via HARNESS.json).
  *
- * Detection:
- *   - Error rate spike above threshold
- *   - P99 latency above threshold
- *   - Alert storm (many alerts in a short window)
+ * Never calls monitoring systems directly (ADR-020) — always through
+ * the resolved `MonitoringAdapter`. With no monitoring configured the
+ * `NoopMonitoringAdapter` returns zeros and no intents are queued.
  *
- * Resolution:
- *   Always queues a MaintenanceIntent — never directly modifies code.
- *   Priority is 'critical' for error spikes, 'high' for latency degradation.
- *
- * Important: this agent diagnoses, it does not fix. The intent it queues
- * goes to the generate layer which must determine the actual code change needed.
+ * Duplicate guard: before queuing a `PERFORMANCE_DEGRADATION` intent,
+ * checks `intents` table for any open (`pending` / `generating`) intent
+ * on the same project whose text already carries the
+ * `[gestalt-maintenance/PERFORMANCE_DEGRADATION]` marker. Avoids
+ * piling on duplicate work while a previous cycle is still mid-flight.
  */
 
+import { createContextLogger, getRepositories } from '@gestalt/core';
+import type { MaintenanceFinding } from '@gestalt/core';
 import type {
-  MaintenanceAgentResult,
-  MaintenanceIntent,
-  MaintenanceHarnessConfig,
-  MonitoringAdapter,
-  MonitoringAlert,
-  EvaluationThresholds,
+  MaintenanceAgentInput, MaintenanceAgentResult, MaintenanceIntent,
+  MaintenanceIntentType, MonitoringThresholds,
 } from '../types';
+import { DEFAULT_MONITORING_THRESHOLDS } from '../types';
+import { resolveMonitoringAdapter } from '../adapters/resolver';
+import { maintenanceIntentPrefix, maintenanceIntentText } from './util';
 
-/**
- * Runs the evaluation agent against current monitoring metrics.
- */
-export async function runEvaluationAgent(
-  config: MaintenanceHarnessConfig,
-  monitoringAdapter: MonitoringAdapter,
-  queueIntent: (intent: Omit<MaintenanceIntent, 'id' | 'createdAt'>) => Promise<MaintenanceIntent>,
-): Promise<MaintenanceAgentResult> {
-  const startedAt = Date.now();
-  const correlationId = crypto.randomUUID();
-  const intentsQueued: MaintenanceIntent[] = [];
+const log = createContextLogger({ module: 'evaluation-agent' });
 
-  if (!config.monitoring) {
-    return nothing('evaluation-agent', startedAt);
+const WINDOW_MINUTES = 15;
+
+export async function runEvaluationAgent(input: MaintenanceAgentInput): Promise<MaintenanceAgentResult> {
+  const monitoring = input.harness.maintenance?.monitoring;
+  if (monitoring && monitoring.enabled === false) {
+    log.info({ projectId: input.projectId }, 'monitoring disabled — skipping evaluation');
+    return { intentsQueued: [], directFixes: 0, findings: [] };
   }
 
-  const thresholds = config.monitoring.thresholds;
+  const thresholds: MonitoringThresholds = {
+    ...DEFAULT_MONITORING_THRESHOLDS,
+    ...(monitoring?.thresholds ?? {}),
+  };
+
+  const adapter = resolveMonitoringAdapter({
+    projectId: input.projectId,
+    harness: input.harness,
+  });
+
+  const findings: MaintenanceFinding[] = [];
+  const candidateIntents: MaintenanceIntent[] = [];
+
+  let errorRate = 0;
+  let latencyP99 = 0;
+  let alertCount = 0;
 
   try {
-    const [errorRate, latencyP99, recentAlerts] = await Promise.all([
-      monitoringAdapter.getErrorRate('*', '5m'),
-      monitoringAdapter.getLatencyP99('*', '5m'),
-      monitoringAdapter.getAlerts(subtractDuration(new Date(), thresholds.alertCountWindow)),
+    [errorRate, latencyP99, alertCount] = await Promise.all([
+      adapter.getErrorRate({ windowMinutes: WINDOW_MINUTES }),
+      adapter.getLatencyP99Ms({ windowMinutes: WINDOW_MINUTES }),
+      adapter.getAlertCount({ windowMinutes: WINDOW_MINUTES }),
     ]);
-
-    const issues = detectIssues(errorRate, latencyP99, recentAlerts, thresholds);
-
-    for (const issue of issues) {
-      const intent = await queueIntent({
-        correlationId,
-        source: 'evaluation-agent',
-        type: issue.type,
-        priority: issue.priority,
-        description: issue.description,
-        affectedFiles: [],   // unknown at detection time — generate layer investigates
-        evidence: issue.evidence,
-        suggestedAction: issue.suggestedAction,
-      });
-      intentsQueued.push(intent);
-    }
-
-    return {
-      agentRole: 'evaluation-agent',
-      status: issues.length === 0 ? 'nothing-to-do' : 'completed',
-      intentsQueued,
-      directFixes: [],
-      signals: [],
-      durationMs: Date.now() - startedAt,
-      runAt: new Date(),
-    };
   } catch (err) {
-    return {
-      agentRole: 'evaluation-agent',
-      status: 'failed',
-      intentsQueued: [],
-      directFixes: [],
-      signals: [{
-        id: crypto.randomUUID(),
-        correlationId,
-        type: 'CONTEXT_GAP',
-        severity: 'medium',
-        sourceAgent: 'evaluation-agent',
-        message: `Evaluation agent failed: ${err instanceof Error ? err.message : String(err)}`,
-        autoResolvable: false,
-      }],
-      durationMs: Date.now() - startedAt,
-      runAt: new Date(),
-    };
+    log.error({ err, projectId: input.projectId, adapter: adapter.type }, 'monitoring query failed');
+    findings.push({
+      type: 'monitoring-query-failed',
+      description: `failed to query monitoring (${adapter.type}): ${err instanceof Error ? err.message : String(err)}`,
+      affectedFiles: [],
+      severity: 'medium',
+      suggestedAction: 'Check the monitoring adapter connection details in HARNESS.json.',
+    });
+    return { intentsQueued: [], directFixes: 0, findings };
   }
-}
 
-// ─── Issue detection ──────────────────────────────────────────────────────────
-
-interface DetectedIssue {
-  type: MaintenanceIntent['type'];
-  priority: MaintenanceIntent['priority'];
-  description: string;
-  evidence: string;
-  suggestedAction: string;
-}
-
-function detectIssues(
-  errorRate: number,
-  latencyP99: number,
-  alerts: MonitoringAlert[],
-  thresholds: EvaluationThresholds,
-): DetectedIssue[] {
-  const issues: DetectedIssue[] = [];
+  log.info(
+    {
+      projectId: input.projectId,
+      adapter: adapter.type,
+      errorRate, latencyP99, alertCount,
+    },
+    'evaluation-agent collected metrics',
+  );
 
   if (errorRate > thresholds.errorRatePercent) {
-    issues.push({
-      type: 'error-rate-spike',
-      priority: errorRate > thresholds.errorRatePercent * 2 ? 'critical' : 'high',
-      description: `Error rate ${errorRate.toFixed(2)}% exceeds threshold of ${thresholds.errorRatePercent}%`,
-      evidence: `Current error rate: ${errorRate.toFixed(2)}% (5-minute window). Threshold: ${thresholds.errorRatePercent}%`,
-      suggestedAction: 'Investigate recent deployments and error logs to identify root cause',
+    candidateIntents.push(buildPerfIntent({
+      projectId: input.projectId,
+      metric: 'error rate',
+      value: errorRate,
+      unit: '%',
+      threshold: thresholds.errorRatePercent,
+    }));
+    findings.push({
+      type: 'metric-breach-error-rate',
+      description: `error rate ${errorRate.toFixed(2)}% > threshold ${thresholds.errorRatePercent}%`,
+      affectedFiles: [],
+      severity: 'high',
+      suggestedAction: 'Investigate the recent deployment for regressions in error handling.',
     });
   }
 
   if (latencyP99 > thresholds.latencyP99Ms) {
-    issues.push({
-      type: 'performance-degradation',
-      priority: 'high',
-      description: `P99 latency ${latencyP99}ms exceeds threshold of ${thresholds.latencyP99Ms}ms`,
-      evidence: `Current P99 latency: ${latencyP99}ms (5-minute window). Threshold: ${thresholds.latencyP99Ms}ms`,
-      suggestedAction: 'Profile recent changes for performance regressions',
+    candidateIntents.push(buildPerfIntent({
+      projectId: input.projectId,
+      metric: 'p99 latency',
+      value: latencyP99,
+      unit: 'ms',
+      threshold: thresholds.latencyP99Ms,
+    }));
+    findings.push({
+      type: 'metric-breach-p99-latency',
+      description: `p99 latency ${latencyP99.toFixed(0)}ms > threshold ${thresholds.latencyP99Ms}ms`,
+      affectedFiles: [],
+      severity: 'high',
+      suggestedAction: 'Look for slow endpoints introduced by the recent change set.',
     });
   }
 
-  if (alerts.length >= thresholds.alertCountThreshold) {
-    const criticalAlerts = alerts.filter((a) => a.severity === 'critical');
-    issues.push({
-      type: 'error-rate-spike',
-      priority: criticalAlerts.length > 0 ? 'critical' : 'high',
-      description: `${alerts.length} alert(s) fired in the last ${thresholds.alertCountWindow}`,
-      evidence: alerts.map((a) => `[${a.severity.toUpperCase()}] ${a.name}: ${a.description}`).join('\n'),
-      suggestedAction: 'Review fired alerts and correlate with recent deployments',
+  if (alertCount > thresholds.alertCountThreshold) {
+    candidateIntents.push(buildSecurityIntent({
+      projectId: input.projectId,
+      alertCount,
+      threshold: thresholds.alertCountThreshold,
+    }));
+    findings.push({
+      type: 'monitoring-alerts-firing',
+      description: `${alertCount} monitoring alert(s) firing > threshold ${thresholds.alertCountThreshold}`,
+      affectedFiles: [],
+      severity: alertCount > thresholds.alertCountThreshold * 2 ? 'high' : 'medium',
+      suggestedAction: 'Review the firing alerts in the monitoring dashboard; address the root cause.',
     });
   }
 
-  return issues;
+  if (candidateIntents.length === 0) {
+    return { intentsQueued: [], directFixes: 0, findings };
+  }
+
+  // Duplicate guard — skip any candidate whose marker already appears on
+  // an open intent for the same project.
+  const intentsQueued = await dedupeAgainstOpenIntents(input.projectId, candidateIntents);
+  return { intentsQueued, directFixes: 0, findings };
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Intent builders ─────────────────────────────────────────────────────────
 
-function subtractDuration(from: Date, duration: string): Date {
-  const match = duration.match(/^(\d+)(s|m|h|d)$/);
-  if (!match) return from;
-  const value = parseInt(match[1], 10);
-  const unit = match[2];
-  const ms = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[unit] ?? 0;
-  return new Date(from.getTime() - value * ms);
-}
-
-function nothing(agentRole: MaintenanceAgentResult['agentRole'], startedAt: number): MaintenanceAgentResult {
+function buildPerfIntent(args: {
+  projectId: string;
+  metric: 'error rate' | 'p99 latency';
+  value: number;
+  unit: '%' | 'ms';
+  threshold: number;
+}): MaintenanceIntent {
+  const type: MaintenanceIntentType = 'PERFORMANCE_DEGRADATION';
+  const evidence = `${args.metric} = ${args.value.toFixed(2)}${args.unit} (threshold ${args.threshold}${args.unit})`;
   return {
-    agentRole,
-    status: 'nothing-to-do',
-    intentsQueued: [],
-    directFixes: [],
-    signals: [],
-    durationMs: Date.now() - startedAt,
-    runAt: new Date(),
+    type,
+    projectId: args.projectId,
+    priority: 'high',
+    affectedFiles: [],
+    evidence,
+    suggestedAction: maintenanceIntentText(
+      type,
+      `Investigate the spike in ${args.metric} (${args.value.toFixed(2)}${args.unit} over the last ${WINDOW_MINUTES} minutes, threshold ${args.threshold}${args.unit}). Review the most recent code changes for regressions and add or tighten tests to prevent recurrence.`,
+    ),
   };
+}
+
+function buildSecurityIntent(args: {
+  projectId: string;
+  alertCount: number;
+  threshold: number;
+}): MaintenanceIntent {
+  const type: MaintenanceIntentType = 'SECURITY_FINDING';
+  const evidence = `${args.alertCount} firing alerts (threshold ${args.threshold})`;
+  return {
+    type,
+    projectId: args.projectId,
+    priority: 'critical',
+    affectedFiles: [],
+    evidence,
+    suggestedAction: maintenanceIntentText(
+      type,
+      `Review the ${args.alertCount} firing monitoring alerts on this project (threshold ${args.threshold}). Confirm whether the alerts indicate a security issue and propose remediation in the codebase.`,
+    ),
+  };
+}
+
+// ─── Duplicate guard ─────────────────────────────────────────────────────────
+
+async function dedupeAgainstOpenIntents(
+  projectId: string,
+  candidates: MaintenanceIntent[],
+): Promise<MaintenanceIntent[]> {
+  const { intents } = getRepositories();
+  const open: { text: string }[] = [];
+  // IntentRepository.list filters by a single status — call twice and merge.
+  for (const status of ['pending', 'generating'] as const) {
+    const { records } = await intents.list({
+      projectId,
+      status,
+      limit: 200,
+      offset: 0,
+    });
+    open.push(...records.map((r) => ({ text: r.text })));
+  }
+  const openTexts = open.map((r) => r.text);
+
+  return candidates.filter((c) => {
+    const prefix = maintenanceIntentPrefix(c.type);
+    return !openTexts.some((t) => t.includes(prefix));
+  });
 }

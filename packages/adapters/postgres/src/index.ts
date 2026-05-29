@@ -17,6 +17,7 @@ import { PostgresArtifactRepository } from './repositories/artifacts';
 import { PostgresSignalRepository } from './repositories/signals';
 import { PostgresProjectRepository } from './repositories/projects';
 import { PostgresDeploymentEventRepository } from './repositories/deployment-events';
+import { PostgresMaintenanceRunRepository } from './repositories/maintenance-runs';
 import { runMigrations } from './migrations/runner';
 
 export { closeDb, pingDb };
@@ -42,5 +43,6 @@ export async function createPostgresAdapter(databaseUrl: string): Promise<Reposi
     localAuth:  new PostgresLocalAuthRepository(),
     projects:   new PostgresProjectRepository(),
     deploymentEvents: new PostgresDeploymentEventRepository(),
+    maintenanceRuns:  new PostgresMaintenanceRunRepository(),
   };
 }

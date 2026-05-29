@@ -463,3 +463,25 @@ costs multiple agent cycles.
 - The deploy-orchestrator interprets a `blocked` outcome from `promotion-agent` as escalation, not retry — the intent transitions to `escalated`.
 - `deployment_events` is append-only (DB-level `REVOKE UPDATE, DELETE`), so a stray write cannot fake a staging promotion after the fact.
 - The check applies to the automated promotion chain only. A future human-triggered emergency promote endpoint (out of scope today) would be a separate audited path with its own ADR.
+
+---
+
+## ADR-035 — Maintenance layer: typed intents and monitoring adapter
+
+**Date:** 2026-05
+**Status:** Accepted
+
+**Decision:** Maintenance agents queue typed `MaintenanceIntent` objects with structured fields (`type`, `projectId`, `priority`, `affectedFiles`, `evidence`, `suggestedAction`) — never free-form natural-language strings. The `evaluation-agent` never calls monitoring systems directly; all calls go through a typed `MonitoringAdapter` interface resolved per-project from `HARNESS.json` `maintenance.monitoring.adapter`. Supported adapters today: `prometheus`, `datadog`, and `noop` (default). Drift-agent may commit additive context-file notes directly to `defaultBranch` as a documented exception to ADR-018; every other maintenance action flows through the generate loop.
+
+**Rationale:**
+- **ADR-019:** Structured intents give the generate orchestrator known context (type + evidence + affected files), enabling the intent-agent to produce a precise `IntentSpec` without re-deriving what changed. Free-form strings would require the LLM to re-parse the agent's reasoning every cycle.
+- **ADR-020:** The monitoring adapter pattern keeps agent code system-agnostic. The same evaluation-agent serves a Prometheus-backed project, a Datadog-backed project, and a project with no monitoring (NoOp) without code changes.
+- **NoOp default:** The maintenance layer still ticks on the cron schedule for projects without monitoring configured — it observes zero metrics and queues no intents. This avoids the configuration-required failure mode where a freshly registered project crashes the scheduler.
+- **ADR-018 exception (drift-agent additive commits):** The drift-agent appends timestamped HTML-comment notes to `docs/DOMAIN.md` describing observed drift. These additions are pure documentation, never code, and never overwrite existing content; routing them through the generate loop would add 30+ seconds of latency to every drift observation for no review value. Anything beyond additive commenting (rewriting a section, removing an entity) is queued as a `CONTEXT_UPDATE` intent for the generate layer.
+
+**Consequences:**
+- New `maintenance_runs` table (migration `005_maintenance.sql`) tracks per-scheduled-run state with `intents_queued` + `direct_fixes` + a JSONB `findings` array.
+- Migration `005` also `GRANT`s `DELETE` on `deployment_events` back (migration `004` had revoked it under the audit-log analogy; gc-agent needs it for the 90-day retention purge — clarified that `deployment_events` are operational logs, not audit records).
+- `IntentRecord.source = 'maintenance-agent'` distinguishes maintenance-queued intents from human ones in `gestalt status` and dashboards.
+- The duplicate-intent guard in evaluation-agent inspects the intent text for the `[gestalt-maintenance/<TYPE>]` prefix that every maintenance dispatch carries — prevents piling on duplicate `PERFORMANCE_DEGRADATION` intents while a previous one is still in-flight.
+- `node-cron` runs in the server process; maintenance is **not** a BullMQ worker. Scheduled agents execute inline in their cron callbacks. Manual operator triggers (`POST /maintenance/trigger`) share the same runner code path.

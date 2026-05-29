@@ -39,11 +39,13 @@ export type {
   LocalAuthRecord,
   ProjectRecord,
   DeploymentEventRecord, DeploymentEventType,
+  MaintenanceRunRecord, MaintenanceRunStatus, MaintenanceFinding,
   RepositoryRegistry,
   IntentRepository, AgentExecutionRepository,
   ArtifactRepository, SignalRepository,
   AuditRepository, UserRepository, LocalAuthRepository,
   ProjectRepository, DeploymentEventRepository,
+  MaintenanceRunRepository,
 } from './repository/index';
 export { getRepositories, setRepositories } from './repository/index';
 

@@ -1,168 +1,128 @@
 /**
- * @gestalt/agents-maintenance
- * All types for the continuous maintenance layer.
+ * @gestalt/agents-maintenance — types.
+ *
+ * Contract for the four scheduled maintenance agents and the
+ * MonitoringAdapter interface used by evaluation-agent (ADR-019,
+ * ADR-020, ADR-035).
  */
 
-import type { SignalType } from '@gestalt/core';
-
-// ─── Agent roles ──────────────────────────────────────────────────────────────
-
-export type MaintenanceAgentRole =
-  | 'drift-agent'
-  | 'alignment-agent'
-  | 'gc-agent'
-  | 'evaluation-agent';
+import type { MaintenanceFinding } from '@gestalt/core';
 
 // ─── Maintenance intent ───────────────────────────────────────────────────────
 
+/**
+ * The four typed maintenance-intent kinds (ADR-019). Agents never queue
+ * free-form strings — always a `MaintenanceIntent` whose `type` lets the
+ * generate orchestrator's downstream agents understand why the intent
+ * exists. The marker `[gestalt-maintenance/<type>]` is prepended to the
+ * intent text on dispatch so duplicate detection can match against the
+ * existing intents table.
+ */
 export type MaintenanceIntentType =
-  | 'documentation-drift'
-  | 'architecture-violation'
-  | 'dead-code'
-  | 'duplicate-logic'
-  | 'deprecated-dependency'
-  | 'performance-degradation'
-  | 'error-rate-spike'
-  | 'security-drift';
+  | 'CONTEXT_UPDATE'           // drift-agent: context files out of sync with code
+  | 'CONTEXT_ALIGNMENT'        // alignment-agent: context files inconsistent with each other
+  | 'PERFORMANCE_DEGRADATION'  // evaluation-agent: metrics threshold breached
+  | 'SECURITY_FINDING';        // evaluation-agent: security signal from monitoring
 
 export type MaintenancePriority = 'critical' | 'high' | 'normal' | 'low';
 
 export interface MaintenanceIntent {
-  id: string;
-  correlationId: string;
-  source: MaintenanceAgentRole;
   type: MaintenanceIntentType;
+  projectId: string;
   priority: MaintenancePriority;
-  description: string;
   affectedFiles: string[];
-  evidence: string;         // what the agent observed
-  suggestedAction: string;  // recommendation — not a command
-  createdAt: Date;
+  /** What the agent observed (raw evidence — metrics, file timestamps, etc.). */
+  evidence: string;
+  /** Human-readable action description, dispatched as the intent text. */
+  suggestedAction: string;
 }
 
-// ─── Agent result ─────────────────────────────────────────────────────────────
+// ─── Monitoring adapter (ADR-020) ─────────────────────────────────────────────
 
-export interface MaintenanceAgentResult {
-  agentRole: MaintenanceAgentRole;
-  status: 'completed' | 'failed' | 'nothing-to-do';
-  intentsQueued: MaintenanceIntent[];
-  directFixes: DirectFix[];   // context file updates applied without generate loop
-  signals: MaintenanceSignal[];
-  durationMs: number;
-  runAt: Date;
-}
-
-export interface DirectFix {
-  file: string;
-  description: string;
-  before: string;
-  after: string;
-}
-
-export interface MaintenanceSignal {
-  id: string;
-  correlationId: string;
-  type: SignalType;
-  severity: 'low' | 'medium' | 'high' | 'critical';
-  sourceAgent: MaintenanceAgentRole;
-  message: string;
-  autoResolvable: boolean;
-}
-
-// ─── Drift detection ──────────────────────────────────────────────────────────
-
-export interface DriftFinding {
-  contextFile: string;
-  driftType: 'missing-entity' | 'stale-field' | 'missing-decision' | 'outdated-architecture';
-  description: string;
-  affectedFiles: string[];
-  severity: 'low' | 'medium' | 'high';
-  directlyFixable: boolean;  // true if agent can fix without generate loop
-}
-
-// ─── Alignment detection ──────────────────────────────────────────────────────
-
-export interface AlignmentViolation {
-  ruleId: string;
-  description: string;
-  affectedFile: string;
-  line: number;
-  severity: 'medium' | 'high';
-}
-
-// ─── GC findings ─────────────────────────────────────────────────────────────
-
-export interface GCFinding {
-  type: 'dead-code' | 'duplicate-logic' | 'deprecated-dependency';
-  description: string;
-  affectedFiles: string[];
-  estimatedImpact: 'low' | 'medium' | 'high';
-  autoFixable: boolean;
-}
-
-// ─── Monitoring adapter ───────────────────────────────────────────────────────
-
-export type MonitoringAdapterType = 'prometheus' | 'datadog' | 'azure-monitor';
-
-export type Duration = `${number}${'s' | 'm' | 'h' | 'd'}`;
-
-export interface MetricsQuery {
-  metric: string;
-  labels?: Record<string, string>;
-  window: Duration;
-}
-
-export interface MetricSample {
-  timestamp: Date;
-  value: number;
-  labels: Record<string, string>;
-}
-
-export interface MonitoringAlert {
-  id: string;
-  name: string;
-  severity: 'critical' | 'warning' | 'info';
-  firedAt: Date;
-  service: string;
-  description: string;
-}
+export type MonitoringAdapterType = 'noop' | 'prometheus' | 'datadog';
 
 export interface MonitoringAdapter {
   readonly type: MonitoringAdapterType;
-  getMetrics(query: MetricsQuery): Promise<MetricSample[]>;
-  getAlerts(since: Date): Promise<MonitoringAlert[]>;
-  getErrorRate(service: string, window: Duration): Promise<number>;
-  getLatencyP99(service: string, window: Duration): Promise<number>;
+  getErrorRate(params: { windowMinutes: number }): Promise<number>;
+  getLatencyP99Ms(params: { windowMinutes: number }): Promise<number>;
+  getAlertCount(params: { windowMinutes: number }): Promise<number>;
 }
 
-// ─── Evaluation thresholds ────────────────────────────────────────────────────
-
-export interface EvaluationThresholds {
-  errorRatePercent: number;       // e.g. 5.0 = alert if error rate > 5%
-  latencyP99Ms: number;           // e.g. 2000 = alert if p99 > 2000ms
-  alertCountWindow: Duration;     // window to count alerts in
-  alertCountThreshold: number;    // number of alerts before intent is queued
+export interface MonitoringThresholds {
+  errorRatePercent: number;   // default 5.0
+  latencyP99Ms: number;       // default 2000
+  alertCountWindow: string;   // e.g. '1h'
+  alertCountThreshold: number; // default 10
 }
 
-// ─── Maintenance harness config ───────────────────────────────────────────────
+export const DEFAULT_MONITORING_THRESHOLDS: MonitoringThresholds = {
+  errorRatePercent: 5.0,
+  latencyP99Ms: 2000,
+  alertCountWindow: '1h',
+  alertCountThreshold: 10,
+};
+
+// ─── Per-agent input + result ────────────────────────────────────────────────
+
+export interface MaintenanceAgentInput {
+  projectId: string;
+  projectName: string;
+  projectGitUrl: string;
+  token: string;
+  defaultBranch: string;
+  harness: HarnessSubset;
+}
+
+/**
+ * Subset of `HARNESS.json` the maintenance agents consume. Loaded by the
+ * scheduler from the project's harness, falling back to defaults when
+ * fields are missing.
+ */
+export interface HarnessSubset {
+  maintenance?: {
+    driftCheck?: { enabled: boolean; scheduleUtc?: string };
+    alignmentCheck?: { enabled: boolean; scheduleUtc?: string };
+    gcCheck?: { enabled: boolean; scheduleUtc?: string };
+    monitoring?: {
+      adapter?: MonitoringAdapterType | string;
+      connectionConfig?: Record<string, string>;
+      thresholds?: Partial<MonitoringThresholds>;
+      enabled?: boolean;
+    };
+  };
+}
+
+export interface MaintenanceAgentResult {
+  intentsQueued: MaintenanceIntent[];
+  directFixes: number;
+  findings: MaintenanceFinding[];
+}
+
+// Re-export for callers that only depend on this package.
+export type { MaintenanceFinding };
+
+// ─── Harness-config aggregate ────────────────────────────────────────────────
 
 export interface MaintenanceHarnessConfig {
-  projectRoot: string;
-  driftCheck: {
-    enabled: boolean;
-    scheduleUtc: string;
-  };
-  alignmentCheck: {
-    enabled: boolean;
-    scheduleUtc: string;
-  };
-  gcCheck: {
-    enabled: boolean;
-    scheduleUtc: string;
-  };
+  driftCheck: { enabled: boolean; scheduleUtc: string };
+  alignmentCheck: { enabled: boolean; scheduleUtc: string };
+  gcCheck: { enabled: boolean; scheduleUtc: string };
   monitoring: {
     adapter: MonitoringAdapterType;
+    enabled: boolean;
     connectionConfig: Record<string, string>;
-    thresholds: EvaluationThresholds;
-  } | null;  // null if no monitoring configured
+    thresholds: MonitoringThresholds;
+  };
 }
+
+export const DEFAULT_MAINTENANCE_CONFIG: MaintenanceHarnessConfig = {
+  driftCheck: { enabled: true, scheduleUtc: '0 2 * * *' },
+  alignmentCheck: { enabled: true, scheduleUtc: '0 3 * * *' },
+  gcCheck: { enabled: true, scheduleUtc: '0 4 * * 5' },
+  monitoring: {
+    adapter: 'noop',
+    enabled: false,
+    connectionConfig: {},
+    thresholds: DEFAULT_MONITORING_THRESHOLDS,
+  },
+};

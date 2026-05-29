@@ -62,6 +62,13 @@ export class PostgresProjectRepository implements ProjectRepository {
     `;
   }
 
+  async listAll(): Promise<ProjectRecord[]> {
+    const db = getDb();
+    return db<ProjectRecord[]>`
+      SELECT * FROM projects ORDER BY created_at DESC
+    `;
+  }
+
   async saveCredential(projectId: string, token: string): Promise<void> {
     // TODO: encrypt at rest before production use.
     const db = getDb();

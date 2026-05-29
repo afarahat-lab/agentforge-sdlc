@@ -17,4 +17,5 @@ export class OracleDeploymentEventRepository implements DeploymentEventRepositor
   async append(_event: Omit<DeploymentEventRecord, 'id' | 'createdAt'>): Promise<DeploymentEventRecord> { return notImplemented(); }
   async findByCorrelationId(_correlationId: string): Promise<DeploymentEventRecord[]> { return notImplemented(); }
   async findStagingPromotion(_correlationId: string): Promise<DeploymentEventRecord | null> { return notImplemented(); }
+  async gcOlderThan(_cutoff: Date): Promise<number> { return notImplemented(); }
 }

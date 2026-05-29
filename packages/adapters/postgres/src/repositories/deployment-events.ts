@@ -100,4 +100,20 @@ export class PostgresDeploymentEventRepository implements DeploymentEventReposit
     `;
     return row ? rowToRecord(row) : null;
   }
+
+  async gcOlderThan(cutoff: Date): Promise<number> {
+    // gc-agent only — migration 005 GRANTs DELETE on this table back to
+    // the application role (migration 004 had revoked it under the
+    // audit_log analogy). UPDATE stays revoked.
+    const db = getDb();
+    const rows = await db<{ count: string }[]>`
+      WITH deleted AS (
+        DELETE FROM deployment_events
+        WHERE created_at < ${cutoff}
+        RETURNING 1
+      )
+      SELECT COUNT(*)::text AS count FROM deleted
+    `;
+    return parseInt(rows[0]?.count ?? '0', 10);
+  }
 }

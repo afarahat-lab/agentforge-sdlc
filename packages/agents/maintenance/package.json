@@ -14,10 +14,13 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@gestalt/core": "workspace:*"
+    "@gestalt/core": "workspace:*",
+    "node-cron": "^3.0.0",
+    "simple-git": "^3.23.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "@types/node-cron": "^3.0.0",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"
   }

@@ -1,178 +1,202 @@
 /**
- * Drift agent — detects when context files have fallen out of sync with the codebase.
+ * Drift agent — detects when context files have fallen out of date with
+ * the codebase.
  *
- * Runs daily at 02:00 UTC (configured in HARNESS.json).
+ * Schedule: daily at 02:00 UTC (overridable via
+ * `HARNESS.json` `maintenance.driftCheck.scheduleUtc`).
  *
- * Detection strategy:
- *   1. Parse context files (DOMAIN.md, ARCHITECTURE.md, AGENTS.md)
- *   2. Parse the actual codebase (AST — entity classes, module structure, exported functions)
- *   3. Compare — identify missing entities, stale fields, outdated architecture descriptions
+ * Strategy:
+ *   1. Clone the project repo (shallow enough to walk 30 days of history).
+ *   2. `git log --since="30 days ago" --name-only --format=` to list
+ *      every file changed in the last 30 days.
+ *   3. Group changed files by module (`src/modules/<module>/...`).
+ *   4. For each module with code changes, find the timestamp of the most
+ *      recent commit to `docs/DOMAIN.md` and `AGENTS.md` (the global
+ *      context files — fine grained DOMAIN sections per module are not
+ *      enforced in the harness today).
+ *   5. If the newest module code change is more than 7 days newer than
+ *      the newest context-file change → drift detected.
  *
- * Resolution strategy:
- *   - 'directly-fixable' drift (additive documentation gaps) → DirectFix applied immediately
- *   - Structural drift (entity removed, module renamed) → MaintenanceIntent queued to generate layer
- *
- * Never modifies GOLDEN_PRINCIPLES.md or DECISIONS.md directly.
- * Those require human review and a new ADR.
+ * Resolution (ADR-018):
+ *   - **Additive** drift fixes — appending an HTML comment to DOMAIN.md
+ *     describing the observation — are committed directly to
+ *     `defaultBranch`. This is the documented exception (drift-agent
+ *     only, additive only, no deletes or rewrites).
+ *   - Structural fixes (rewriting the section, removing an obsolete
+ *     entity) are queued as `CONTEXT_UPDATE` maintenance intents so the
+ *     generate layer handles them with proper review.
  */
 
+import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import { simpleGit, type SimpleGit } from 'simple-git';
+import { createContextLogger } from '@gestalt/core';
+import type { MaintenanceFinding } from '@gestalt/core';
 import type {
-  MaintenanceAgentResult,
-  MaintenanceIntent,
-  DirectFix,
-  DriftFinding,
-  MaintenanceHarnessConfig,
+  MaintenanceAgentInput, MaintenanceAgentResult, MaintenanceIntent,
 } from '../types';
+import { authenticatedGitUrl, maintenanceIntentText } from './util';
 
-const DIRECTLY_FIXABLE_DRIFT: DriftFinding['driftType'][] = ['missing-entity'];
+const log = createContextLogger({ module: 'drift-agent' });
 
-/**
- * Runs the drift agent against the project.
- */
-export async function runDriftAgent(
-  config: MaintenanceHarnessConfig,
-  readContextFile: (path: string) => Promise<string>,
-  readCodebase: (root: string) => Promise<CodebaseSnapshot>,
-  writeContextFile: (path: string, content: string) => Promise<void>,
-  queueIntent: (intent: Omit<MaintenanceIntent, 'id' | 'createdAt'>) => Promise<MaintenanceIntent>,
-): Promise<MaintenanceAgentResult> {
-  const startedAt = Date.now();
-  const correlationId = crypto.randomUUID();
+const HISTORY_WINDOW_DAYS = 30;
+const STALENESS_THRESHOLD_DAYS = 7;
+const CONTEXT_FILES = ['docs/DOMAIN.md', 'AGENTS.md'] as const;
+
+export async function runDriftAgent(input: MaintenanceAgentInput): Promise<MaintenanceAgentResult> {
+  const workDir = await mkdtemp(join(tmpdir(), `gestalt-drift-${input.projectId}-`));
+  const findings: MaintenanceFinding[] = [];
   const intentsQueued: MaintenanceIntent[] = [];
-  const directFixes: DirectFix[] = [];
-
-  if (!config.driftCheck.enabled) {
-    return nothing('drift-agent', startedAt);
-  }
+  let directFixes = 0;
 
   try {
-    const [domainMd, architectureMd, snapshot] = await Promise.all([
-      readContextFile(`${config.projectRoot}/docs/DOMAIN.md`),
-      readContextFile(`${config.projectRoot}/docs/ARCHITECTURE.md`),
-      readCodebase(config.projectRoot),
-    ]);
-
-    const findings = detectDrift(domainMd, architectureMd, snapshot);
-
-    for (const finding of findings) {
-      if (finding.directlyFixable && DIRECTLY_FIXABLE_DRIFT.includes(finding.driftType)) {
-        // Apply direct fix — additive documentation update
-        const fix = await buildDirectFix(finding, snapshot, readContextFile);
-        if (fix) {
-          await writeContextFile(`${config.projectRoot}/${finding.contextFile}`, fix.after);
-          directFixes.push(fix);
-        }
-      } else {
-        // Queue as maintenance intent for the generate layer
-        const intent = await queueIntent({
-          correlationId,
-          source: 'drift-agent',
-          type: 'documentation-drift',
-          priority: finding.severity === 'high' ? 'high' : 'normal',
-          description: finding.description,
-          affectedFiles: finding.affectedFiles,
-          evidence: `Drift detected in ${finding.contextFile}: ${finding.description}`,
-          suggestedAction: `Update ${finding.contextFile} to reflect current codebase state`,
-        });
-        intentsQueued.push(intent);
-      }
+    const cloneUrl = authenticatedGitUrl(input.projectGitUrl, input.token);
+    log.info({ projectId: input.projectId, workDir }, 'Cloning project for drift check');
+    await simpleGit().clone(cloneUrl, workDir);
+    const repo: SimpleGit = simpleGit(workDir);
+    try {
+      await repo.checkout(input.defaultBranch);
+    } catch {
+      // Branch may not exist yet on a brand-new repo.
     }
 
-    return {
-      agentRole: 'drift-agent',
-      status: findings.length === 0 ? 'nothing-to-do' : 'completed',
-      intentsQueued,
-      directFixes,
-      signals: [],
-      durationMs: Date.now() - startedAt,
-      runAt: new Date(),
-    };
-  } catch (err) {
-    return {
-      agentRole: 'drift-agent',
-      status: 'failed',
-      intentsQueued: [],
-      directFixes: [],
-      signals: [{
-        id: crypto.randomUUID(),
-        correlationId,
-        type: 'CONTEXT_GAP',
-        severity: 'medium',
-        sourceAgent: 'drift-agent',
-        message: `Drift agent failed: ${err instanceof Error ? err.message : String(err)}`,
-        autoResolvable: false,
-      }],
-      durationMs: Date.now() - startedAt,
-      runAt: new Date(),
-    };
+    // Most recent commit timestamps for each global context file.
+    const contextLastChanged = new Map<string, number>();
+    for (const file of CONTEXT_FILES) {
+      const ts = await mostRecentCommitTimestamp(repo, file);
+      contextLastChanged.set(file, ts);
+    }
+    const newestContextChange = Math.max(0, ...Array.from(contextLastChanged.values()));
+
+    // Files changed in the window.
+    const changedFiles = await filesChangedSince(repo, `${HISTORY_WINDOW_DAYS} days ago`);
+    const moduleChanges = groupByModule(changedFiles);
+
+    if (moduleChanges.size === 0) {
+      log.info({ projectId: input.projectId }, 'No recent module changes — no drift to evaluate');
+      return { intentsQueued, directFixes, findings };
+    }
+
+    const stalenessThresholdMs = STALENESS_THRESHOLD_DAYS * 24 * 60 * 60 * 1000;
+    for (const [moduleName, files] of moduleChanges) {
+      const newestCodeChange = await newestCommitTimestampForFiles(repo, files);
+      const driftMs = newestCodeChange - newestContextChange;
+      if (driftMs <= stalenessThresholdMs) continue;
+
+      const driftDays = Math.round(driftMs / 24 / 60 / 60 / 1000);
+      const evidence = [
+        `module: src/modules/${moduleName}`,
+        `files changed in last ${HISTORY_WINDOW_DAYS}d: ${files.length}`,
+        `code newer than context by ~${driftDays} days`,
+        `latest context update: ${new Date(newestContextChange).toISOString().slice(0, 10)}`,
+      ].join('; ');
+
+      findings.push({
+        type: 'context-drift',
+        description: `module '${moduleName}' has drifted ${driftDays} days from the project's context files`,
+        affectedFiles: files,
+        severity: driftDays > 21 ? 'high' : driftDays > 14 ? 'medium' : 'low',
+        suggestedAction:
+          `Re-review docs/DOMAIN.md for the '${moduleName}' module and reconcile with the recent code changes.`,
+      });
+
+      // Direct additive fix: append a dated note to docs/DOMAIN.md.
+      const note = `\n<!-- drift-agent: module '${moduleName}' has ${files.length} file(s) changed in the last ${HISTORY_WINDOW_DAYS} days as of ${new Date().toISOString().slice(0, 10)}. Context-file last touched ~${driftDays} days earlier. Review and update if the domain model changed. -->\n`;
+      const domainPath = join(workDir, 'docs/DOMAIN.md');
+      try {
+        const current = await readFile(domainPath, 'utf8');
+        if (!current.includes(note)) {
+          await writeFile(domainPath, current + note, 'utf8');
+        }
+      } catch {
+        // docs/DOMAIN.md missing — skip the additive note for this module.
+      }
+
+      // Queue structural follow-up via the generate loop.
+      intentsQueued.push({
+        type: 'CONTEXT_UPDATE',
+        projectId: input.projectId,
+        priority: 'normal',
+        affectedFiles: ['docs/DOMAIN.md', ...files.slice(0, 10)],
+        evidence,
+        suggestedAction: maintenanceIntentText(
+          'CONTEXT_UPDATE',
+          `Update docs/DOMAIN.md to reflect the recent changes in src/modules/${moduleName}. ${files.length} files changed in the last ${HISTORY_WINDOW_DAYS} days; the DOMAIN.md entry has not been touched in ~${driftDays} days. Review the latest code and bring the domain model in sync.`,
+        ),
+      });
+    }
+
+    // Commit the additive notes (ADR-018 exception). Only if we wrote
+    // something — repo.status detects no-ops.
+    await repo.addConfig('user.name', 'Gestalt Drift Agent');
+    await repo.addConfig('user.email', 'drift-agent@gestalt.local');
+    await repo.add('.');
+    const status = await repo.status();
+    if (status.files.length > 0) {
+      await repo.commit(
+        `docs: drift-agent observations on ${new Date().toISOString().slice(0, 10)} [gestalt-maintenance]`,
+      );
+      await repo.push('origin', input.defaultBranch);
+      directFixes = status.files.length;
+      log.info(
+        { projectId: input.projectId, fileCount: status.files.length },
+        'drift-agent committed additive notes',
+      );
+    }
+
+    return { intentsQueued, directFixes, findings };
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
-/**
- * Compares context files against the codebase snapshot and returns drift findings.
- * Phase 2: full AST-based implementation.
- */
-function detectDrift(
-  _domainMd: string,
-  _architectureMd: string,
-  _snapshot: CodebaseSnapshot,
-): DriftFinding[] {
-  // Phase 2:
-  // - Parse DOMAIN.md entities vs actual TypeScript interfaces/classes
-  // - Parse ARCHITECTURE.md modules vs actual folder structure
-  // - Detect missing entities, stale fields, removed modules
-  return [];
+// ─── Git helpers ─────────────────────────────────────────────────────────────
+
+async function filesChangedSince(repo: SimpleGit, since: string): Promise<string[]> {
+  // --format= empties the format spec; --name-only emits one file per
+  // line. Empty lines separate commits.
+  const raw = await repo.raw(['log', `--since=${since}`, '--name-only', '--format=']);
+  const files = new Set<string>();
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    files.add(trimmed);
+  }
+  return Array.from(files);
 }
 
-/**
- * Builds a direct fix for additive documentation drift.
- * Phase 2: full implementation using LLM to generate updated content.
- */
-async function buildDirectFix(
-  _finding: DriftFinding,
-  _snapshot: CodebaseSnapshot,
-  _readContextFile: (path: string) => Promise<string>,
-): Promise<DirectFix | null> {
-  return null;
+async function mostRecentCommitTimestamp(repo: SimpleGit, file: string): Promise<number> {
+  try {
+    const raw = await repo.raw(['log', '-1', '--format=%aI', '--', file]);
+    const trimmed = raw.trim();
+    if (!trimmed) return 0;
+    return new Date(trimmed).getTime();
+  } catch {
+    return 0;
+  }
 }
 
-// ─── Codebase snapshot ────────────────────────────────────────────────────────
-
-export interface CodebaseSnapshot {
-  entities: EntitySnapshot[];
-  modules: ModuleSnapshot[];
-  exports: ExportSnapshot[];
+async function newestCommitTimestampForFiles(repo: SimpleGit, files: string[]): Promise<number> {
+  let newest = 0;
+  for (const file of files) {
+    const ts = await mostRecentCommitTimestamp(repo, file);
+    if (ts > newest) newest = ts;
+  }
+  return newest;
 }
 
-export interface EntitySnapshot {
-  name: string;
-  fields: Array<{ name: string; type: string }>;
-  filePath: string;
-}
-
-export interface ModuleSnapshot {
-  name: string;
-  path: string;
-  imports: string[];
-  exports: string[];
-}
-
-export interface ExportSnapshot {
-  name: string;
-  type: 'function' | 'class' | 'interface' | 'type' | 'const';
-  filePath: string;
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function nothing(agentRole: MaintenanceAgentResult['agentRole'], startedAt: number): MaintenanceAgentResult {
-  return {
-    agentRole,
-    status: 'nothing-to-do',
-    intentsQueued: [],
-    directFixes: [],
-    signals: [],
-    durationMs: Date.now() - startedAt,
-    runAt: new Date(),
-  };
+function groupByModule(files: string[]): Map<string, string[]> {
+  const grouped = new Map<string, string[]>();
+  const re = /^src\/modules\/([^/]+)\//;
+  for (const file of files) {
+    const match = re.exec(file);
+    if (!match) continue;
+    const module = match[1] ?? '';
+    if (!module) continue;
+    const existing = grouped.get(module) ?? [];
+    existing.push(file);
+    grouped.set(module, existing);
+  }
+  return grouped;
 }

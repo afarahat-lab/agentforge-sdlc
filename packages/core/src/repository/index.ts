@@ -168,6 +168,12 @@ export interface ProjectRepository extends BaseRepository {
   findById(id: string): Promise<ProjectRecord | null>;
   findByName(name: string): Promise<ProjectRecord | null>;
   list(userId: string): Promise<ProjectRecord[]>;
+  /**
+   * All registered projects, regardless of `created_by`. Used by the
+   * maintenance scheduler — scheduled runs iterate every project, not
+   * just one user's view of them.
+   */
+  listAll(): Promise<ProjectRecord[]>;
 
   // Credentials are stored alongside but exposed only by id —
   // the token never appears in API responses (see routes/projects.ts).
@@ -192,6 +198,58 @@ export interface RepositoryRegistry {
   localAuth: LocalAuthRepository;
   projects: ProjectRepository;
   deploymentEvents: DeploymentEventRepository;
+  maintenanceRuns: MaintenanceRunRepository;
+}
+
+// ─── Maintenance run repository (ADR-018, ADR-019, ADR-035) ───────────────────
+
+export type MaintenanceRunStatus = 'running' | 'completed' | 'failed';
+
+/**
+ * A single observation produced by a maintenance agent during a run.
+ * Persisted on the maintenance_runs row as a JSONB array so dashboards
+ * can render the per-run report without joining other tables.
+ */
+export interface MaintenanceFinding {
+  type: string;            // agent-specific kind, e.g. 'context-drift', 'gc-stale-branch'
+  description: string;
+  affectedFiles: string[];
+  severity: 'low' | 'medium' | 'high';
+  suggestedAction: string;
+}
+
+export interface MaintenanceRunRecord {
+  id: string;
+  agentRole: string;
+  projectId: string | null;
+  status: MaintenanceRunStatus;
+  intentsQueued: number;
+  directFixes: number;
+  findings: MaintenanceFinding[];
+  durationMs: number | null;
+  runAt: Date;
+  completedAt: Date | null;
+}
+
+export interface MaintenanceRunRepository extends BaseRepository {
+  create(
+    run: Omit<MaintenanceRunRecord, 'id' | 'runAt' | 'completedAt'>,
+  ): Promise<MaintenanceRunRecord>;
+  complete(
+    id: string,
+    result: {
+      status: 'completed' | 'failed';
+      intentsQueued: number;
+      directFixes: number;
+      findings: MaintenanceFinding[];
+      durationMs: number;
+    },
+  ): Promise<MaintenanceRunRecord>;
+  list(params: {
+    projectId?: string;
+    agentRole?: string;
+    limit: number;
+  }): Promise<MaintenanceRunRecord[]>;
 }
 
 // ─── Deployment event repository (ADR-033) ────────────────────────────────────
@@ -229,6 +287,12 @@ export interface DeploymentEventRepository extends BaseRepository {
   findByCorrelationId(correlationId: string): Promise<DeploymentEventRecord[]>;
   /** Returns the most recent `promoted-staging` event for the cycle, or null. */
   findStagingPromotion(correlationId: string): Promise<DeploymentEventRecord | null>;
+  /**
+   * Deletes rows older than `cutoff`. Called only by gc-agent (ADR-018 /
+   * ADR-035): deployment_events are operational logs, not audit records,
+   * so periodic pruning is allowed. Returns the number of rows deleted.
+   */
+  gcOlderThan(cutoff: Date): Promise<number>;
 }
 
 let _registry: RepositoryRegistry | null = null;

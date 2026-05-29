@@ -1,149 +1,167 @@
 /**
- * Garbage collection agent — detects accumulated technical debt.
+ * GC agent — periodic cleanup of stale artifacts.
  *
- * Runs weekly on Fridays at 04:00 UTC (configured in HARNESS.json).
+ * Schedule: weekly on Friday at 04:00 UTC.
  *
- * Detection targets:
- *   - Dead code: exported symbols with no references in the codebase
- *   - Duplicate logic: semantically similar functions across modules
- *   - Deprecated dependencies: packages with newer major versions or
- *     security advisories
+ * What it removes:
+ *   1. Remote `gestalt/*` branches older than 30 days. (Operators are
+ *      welcome to merge a PR after a long delay; once the branch is
+ *      stale enough, the platform assumes it's been superseded.)
+ *   2. `.gestalt/*` spec files older than 90 days (intent specs, design
+ *      specs, LLM review prose). Committed deletion.
+ *   3. `deployment_events` rows older than 90 days (operational logs,
+ *      not audit records — ADR-035).
  *
- * Never deletes or modifies code directly.
- * Always queues MaintenanceIntents — goes through generate→gate→deploy.
- * Intents are priority: 'low' unless a deprecated dependency has a security advisory.
+ * gc-agent never queues `MaintenanceIntent` objects. All work is direct,
+ * recorded in `MaintenanceRunRecord.findings` so dashboards can show
+ * exactly what was pruned.
  */
 
-import type {
-  MaintenanceAgentResult,
-  MaintenanceIntent,
-  MaintenanceHarnessConfig,
-  GCFinding,
-} from '../types';
+import { mkdtemp, readdir, rm, stat } from 'fs/promises';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import { simpleGit } from 'simple-git';
+import { createContextLogger, getRepositories } from '@gestalt/core';
+import type { MaintenanceFinding } from '@gestalt/core';
+import type { MaintenanceAgentInput, MaintenanceAgentResult } from '../types';
+import { authenticatedGitUrl } from './util';
 
-/**
- * Runs the GC agent against the full project codebase.
- */
-export async function runGCAgent(
-  config: MaintenanceHarnessConfig,
-  readCodebase: (root: string) => Promise<string[]>,
-  readPackageJson: (root: string) => Promise<Record<string, unknown>>,
-  queueIntent: (intent: Omit<MaintenanceIntent, 'id' | 'createdAt'>) => Promise<MaintenanceIntent>,
-): Promise<MaintenanceAgentResult> {
-  const startedAt = Date.now();
-  const correlationId = crypto.randomUUID();
-  const intentsQueued: MaintenanceIntent[] = [];
+const log = createContextLogger({ module: 'gc-agent' });
 
-  if (!config.gcCheck.enabled) {
-    return nothing('gc-agent', startedAt);
+const BRANCH_STALE_DAYS = 30;
+const SPEC_STALE_DAYS = 90;
+const DEPLOYMENT_EVENT_RETENTION_DAYS = 90;
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+export async function runGCAgent(input: MaintenanceAgentInput): Promise<MaintenanceAgentResult> {
+  const findings: MaintenanceFinding[] = [];
+  let directFixes = 0;
+
+  // ─── DB-side prune (no clone needed) ───────────────────────────────────
+  const { deploymentEvents } = getRepositories();
+  const cutoff = new Date(Date.now() - DEPLOYMENT_EVENT_RETENTION_DAYS * MS_PER_DAY);
+  try {
+    const purgedRows = await deploymentEvents.gcOlderThan(cutoff);
+    if (purgedRows > 0) {
+      directFixes += purgedRows;
+      findings.push({
+        type: 'gc-deployment-events',
+        description: `purged ${purgedRows} deployment_events row(s) older than ${DEPLOYMENT_EVENT_RETENTION_DAYS} days`,
+        affectedFiles: [],
+        severity: 'low',
+        suggestedAction: '(no action required — operational log cleanup)',
+      });
+      log.info(
+        { projectId: input.projectId, purgedRows, retentionDays: DEPLOYMENT_EVENT_RETENTION_DAYS },
+        'gc-agent purged stale deployment_events rows',
+      );
+    }
+  } catch (err) {
+    log.error({ err, projectId: input.projectId }, 'deployment_events GC failed');
+    findings.push({
+      type: 'gc-deployment-events-failed',
+      description: `failed to purge stale deployment_events rows: ${err instanceof Error ? err.message : String(err)}`,
+      affectedFiles: [],
+      severity: 'medium',
+      suggestedAction: 'Check the application role still has DELETE permission on deployment_events (migration 005).',
+    });
   }
 
+  // ─── Repo-side prune (needs a clone) ───────────────────────────────────
+  const workDir = await mkdtemp(join(tmpdir(), `gestalt-gc-${input.projectId}-`));
   try {
-    const [filePaths, packageJson] = await Promise.all([
-      readCodebase(config.projectRoot),
-      readPackageJson(config.projectRoot),
-    ]);
+    const cloneUrl = authenticatedGitUrl(input.projectGitUrl, input.token);
+    await simpleGit().clone(cloneUrl, workDir);
+    const repo = simpleGit(workDir);
+    try {
+      await repo.checkout(input.defaultBranch);
+    } catch { /* new repo with no default branch yet — skip */ }
 
-    const findings = await detectGCFindings(filePaths, packageJson);
-
-    // Group findings by type and create focused intents
-    const byType = groupByType(findings);
-
-    for (const [type, typeFindings] of Object.entries(byType)) {
-      const hasSecurityIssue = type === 'deprecated-dependency' &&
-        typeFindings.some((f) => f.estimatedImpact === 'high');
-
-      const intent = await queueIntent({
-        correlationId,
-        source: 'gc-agent',
-        type: mapToIntentType(type as GCFinding['type']),
-        priority: hasSecurityIssue ? 'high' : 'low',
-        description: `${typeFindings.length} ${type} finding(s) detected`,
-        affectedFiles: typeFindings.flatMap((f) => f.affectedFiles),
-        evidence: typeFindings.map((f) => f.description).join('\n'),
-        suggestedAction: buildSuggestedAction(type as GCFinding['type'], typeFindings.length),
+    // 1. Delete stale gestalt/* remote branches.
+    const branchCutoffMs = Date.now() - BRANCH_STALE_DAYS * MS_PER_DAY;
+    const remoteBranchesRaw = await repo.raw(['for-each-ref', '--format=%(refname:short) %(committerdate:unix)', 'refs/remotes/origin/gestalt/']);
+    const deletedBranches: string[] = [];
+    for (const line of remoteBranchesRaw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const parts = trimmed.split(/\s+/);
+      const ref = parts[0];
+      const tsStr = parts[1];
+      if (!ref || !tsStr) continue;
+      const ts = parseInt(tsStr, 10) * 1000;
+      if (Number.isNaN(ts) || ts >= branchCutoffMs) continue;
+      const localName = ref.replace(/^origin\//, '');
+      try {
+        await repo.push(['origin', '--delete', localName]);
+        deletedBranches.push(localName);
+      } catch (err) {
+        log.warn(
+          { branch: localName, err: err instanceof Error ? err.message : String(err) },
+          'gc-agent failed to delete remote branch',
+        );
+      }
+    }
+    if (deletedBranches.length > 0) {
+      directFixes += deletedBranches.length;
+      findings.push({
+        type: 'gc-stale-branches',
+        description: `deleted ${deletedBranches.length} stale gestalt/* branch(es) older than ${BRANCH_STALE_DAYS} days`,
+        affectedFiles: deletedBranches.map((b) => `(branch) ${b}`),
+        severity: 'low',
+        suggestedAction: '(no action required)',
       });
-      intentsQueued.push(intent);
+      log.info(
+        { projectId: input.projectId, count: deletedBranches.length },
+        'gc-agent deleted stale branches',
+      );
     }
 
-    return {
-      agentRole: 'gc-agent',
-      status: findings.length === 0 ? 'nothing-to-do' : 'completed',
-      intentsQueued,
-      directFixes: [],
-      signals: [],
-      durationMs: Date.now() - startedAt,
-      runAt: new Date(),
-    };
-  } catch (err) {
-    return {
-      agentRole: 'gc-agent',
-      status: 'failed',
-      intentsQueued: [],
-      directFixes: [],
-      signals: [{
-        id: crypto.randomUUID(),
-        correlationId,
-        type: 'CONTEXT_GAP',
-        severity: 'low',
-        sourceAgent: 'gc-agent',
-        message: `GC agent failed: ${err instanceof Error ? err.message : String(err)}`,
-        autoResolvable: false,
-      }],
-      durationMs: Date.now() - startedAt,
-      runAt: new Date(),
-    };
+    // 2. Delete `.gestalt/*` spec files older than 90 days, then commit.
+    const specCutoffMs = Date.now() - SPEC_STALE_DAYS * MS_PER_DAY;
+    const gestaltDir = join(workDir, '.gestalt');
+    const deletedSpecs: string[] = [];
+    try {
+      const entries = await readdir(gestaltDir);
+      for (const name of entries) {
+        const path = join(gestaltDir, name);
+        const info = await stat(path).catch(() => null);
+        if (!info || !info.isFile()) continue;
+        if (info.mtimeMs >= specCutoffMs) continue;
+        await rm(path).catch(() => undefined);
+        deletedSpecs.push(`.gestalt/${name}`);
+      }
+    } catch {
+      // No .gestalt directory — nothing to do.
+    }
+
+    if (deletedSpecs.length > 0) {
+      await repo.addConfig('user.name', 'Gestalt GC Agent');
+      await repo.addConfig('user.email', 'gc-agent@gestalt.local');
+      await repo.add('.');
+      const status = await repo.status();
+      if (status.files.length > 0) {
+        await repo.commit(
+          `chore: gc-agent removed ${deletedSpecs.length} stale .gestalt spec file(s) [gestalt-maintenance]`,
+        );
+        await repo.push('origin', input.defaultBranch);
+        directFixes += deletedSpecs.length;
+        findings.push({
+          type: 'gc-stale-specs',
+          description: `deleted ${deletedSpecs.length} .gestalt spec file(s) older than ${SPEC_STALE_DAYS} days`,
+          affectedFiles: deletedSpecs,
+          severity: 'low',
+          suggestedAction: '(no action required)',
+        });
+        log.info(
+          { projectId: input.projectId, count: deletedSpecs.length },
+          'gc-agent removed stale spec files',
+        );
+      }
+    }
+
+    return { intentsQueued: [], directFixes, findings };
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
   }
-}
-
-/**
- * Detects GC findings across the codebase.
- * Phase 2: full implementation using TypeScript compiler API + npm audit.
- */
-async function detectGCFindings(
-  _filePaths: string[],
-  _packageJson: Record<string, unknown>,
-): Promise<GCFinding[]> {
-  // Phase 2:
-  // Dead code: TypeScript language service findReferences() for all exports
-  // Duplicate logic: AST-based similarity detection across function bodies
-  // Deprecated deps: npm audit + outdated API surface checks
-  return [];
-}
-
-function groupByType(findings: GCFinding[]): Record<string, GCFinding[]> {
-  return findings.reduce<Record<string, GCFinding[]>>((acc, f) => {
-    acc[f.type] = [...(acc[f.type] ?? []), f];
-    return acc;
-  }, {});
-}
-
-function mapToIntentType(type: GCFinding['type']): MaintenanceIntent['type'] {
-  const map: Record<GCFinding['type'], MaintenanceIntent['type']> = {
-    'dead-code':             'dead-code',
-    'duplicate-logic':       'duplicate-logic',
-    'deprecated-dependency': 'deprecated-dependency',
-  };
-  return map[type];
-}
-
-function buildSuggestedAction(type: GCFinding['type'], count: number): string {
-  const actions: Record<GCFinding['type'], string> = {
-    'dead-code':             `Remove ${count} unused exported symbol(s)`,
-    'duplicate-logic':       `Consolidate ${count} duplicate logic pattern(s) into shared utilities`,
-    'deprecated-dependency': `Update ${count} deprecated package(s) to current major versions`,
-  };
-  return actions[type];
-}
-
-function nothing(agentRole: MaintenanceAgentResult['agentRole'], startedAt: number): MaintenanceAgentResult {
-  return {
-    agentRole,
-    status: 'nothing-to-do',
-    intentsQueued: [],
-    directFixes: [],
-    signals: [],
-    durationMs: Date.now() - startedAt,
-    runAt: new Date(),
-  };
 }

@@ -337,10 +337,26 @@ function buildHarnessJson({ projectName, projectDescription }: HarnessInputs): s
     pipeline: {
       adapter: 'noop',
     },
+    // Maintenance layer (ADR-035). Schedules are read per-project; if the
+    // server has already started the scheduler defaults apply until a
+    // restart. `monitoring` defaults to `noop` so evaluation-agent never
+    // observes a metric breach; switch to `prometheus` or `datadog` and
+    // populate `connectionConfig` to enable real evaluation.
     maintenance: {
       driftCheck:     { enabled: true, scheduleUtc: '0 2 * * *' },
       alignmentCheck: { enabled: true, scheduleUtc: '0 3 * * *' },
       gcCheck:        { enabled: true, scheduleUtc: '0 4 * * 5' },
+      monitoring: {
+        adapter: 'noop',
+        enabled: true,
+        connectionConfig: {},
+        thresholds: {
+          errorRatePercent: 5.0,
+          latencyP99Ms: 2000,
+          alertCountWindow: '1h',
+          alertCountThreshold: 10,
+        },
+      },
     },
     identity: {
       providers: [{ type: 'local', enabled: true, warningBanner: true, allowedInProduction: false }],

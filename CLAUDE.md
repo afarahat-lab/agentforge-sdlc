@@ -148,7 +148,7 @@ the **Current state** section below for the authoritative snapshot and the
 | `@gestalt/agents-generate` | ✅ compiles |
 | `@gestalt/agents-quality-gate` | ✅ compiles (stub) |
 | `@gestalt/agents-deploy` | ✅ compiles (stub) |
-| `@gestalt/agents-maintenance` | ✅ compiles (stub) |
+| `@gestalt/agents-maintenance` | ✅ compiles |
 | `@gestalt/registry` | ✅ compiles |
 | `@gestalt/server` | ✅ compiles |
 | `@gestalt/cli` | ✅ compiles |
@@ -211,6 +211,11 @@ All ADRs are in `docs/DECISIONS.md`. Key ones:
 - ADR-034: Production promotion requires a confirmed staging
   `promoted-staging` event for the same correlationId. Unconditional;
   cannot be bypassed by adapter / config / operator override
+- ADR-035: Maintenance layer queues typed `MaintenanceIntent` objects
+  (never free-form strings); evaluation-agent uses a typed
+  `MonitoringAdapter` (Prometheus / Datadog / NoOp) resolved per-project
+  from HARNESS.json. Drift-agent may commit additive docs notes directly
+  (the one ADR-018 exception, additive-only)
 
 ---
 
@@ -395,7 +400,7 @@ Operator caveats:
 
 ## Current state (keep this section current)
 
-**Last updated:** 2026-05-30 (Claude Code — single-push deploy + workflow seed)
+**Last updated:** 2026-05-30 (Claude Code — maintenance layer v1)
 
 **Repo:** https://github.com/afarahat-lab/gestalt
 
@@ -403,8 +408,8 @@ Operator caveats:
 - All 8 architecture layers fully designed and documented
 - All 12 buildable workspace packages compile clean (`pnpm -r build`)
 - `docker-compose up -d` succeeds — server, postgres, redis all `Up (healthy)`
-- All four migrations apply on startup: `001_initial`, `002_local_auth`,
-  `003_projects`, `004_deployments`
+- All five migrations apply on startup: `001_initial`, `002_local_auth`,
+  `003_projects`, `004_deployments`, `005_maintenance`
 - Server reachable on http://localhost:3000 — `/health` returns 200
 - Auth middleware active — protected routes return 401
 - First-boot bootstrap verified end-to-end: `gestalt init-admin` creates
@@ -415,6 +420,44 @@ Operator caveats:
 - `gestalt projects list` and `gestalt projects use <name>` working
 - `gestalt run` queues intent → orchestrator picks up → clones project
   repo fresh per cycle → runs generate loop against cloned harness files
+- **Maintenance layer wired end-to-end (ADR-018, ADR-019, ADR-020,
+  ADR-035).** Four scheduled agents run in-process via `node-cron`,
+  registered as `startMaintenanceScheduler(config)` at server.ts step 9:
+  - **drift-agent** (daily 02:00 UTC) — clones the project, finds
+    `src/modules/*/...` files changed in the last 30 days, compares
+    against the most recent commit timestamp on the global context
+    files; for modules drifted by > 7 days appends a timestamped HTML
+    comment to `docs/DOMAIN.md` (ADR-018 additive-only exception, direct
+    commit + push) and queues a `CONTEXT_UPDATE` MaintenanceIntent
+  - **alignment-agent** (daily 03:00 UTC) — reads context files,
+    cross-checks DOMAIN.md entities ↔ ARCHITECTURE.md modules, and
+    GP-NNN cross-references in AGENTS.md; queues `CONTEXT_ALIGNMENT`
+    intents per misalignment
+  - **gc-agent** (weekly Fri 04:00 UTC) — deletes remote `gestalt/*`
+    branches older than 30 days, `.gestalt/*` spec files older than 90
+    days (committed deletion), and `deployment_events` rows older than
+    90 days. Never queues intents
+  - **evaluation-agent** (every 15 min) — resolves the project's
+    `MonitoringAdapter` from HARNESS.json; queries error rate / p99
+    latency / alert count; queues `PERFORMANCE_DEGRADATION` or
+    `SECURITY_FINDING` intents on threshold breach. Dedupe guard skips
+    any candidate whose `[gestalt-maintenance/<type>]` prefix already
+    appears on an open intent (status `pending` / `generating`)
+  - All four agents share a runner (`runMaintenanceAgent`) that creates
+    a `maintenance_runs` row, dispatches queued intents into the
+    `gestalt-generate` queue with `source: 'maintenance-agent'` and the
+    operator-supplied `suggestedAction` as intent text, updates the row
+    on completion, and emits a `maintenance.run-completed` SSE event
+  - Manual operator trigger via `POST /maintenance/trigger { agentRole,
+    projectId }` (requireRole operator); same runner code path as the
+    cron schedules
+  - `GET /maintenance/runs?projectId&agentRole&limit` returns
+    `MaintenanceRunRecord[]`
+  - Live verification against `trackeros`: all 4 agents triggered;
+    alignment-agent produced 5 findings → 5 maintenance intents
+    queued (all carrying `[gestalt-maintenance/CONTEXT_ALIGNMENT]`
+    prefix; generate orchestrator picked them up immediately); other
+    agents returned 0 findings as expected on this small repo
 - **Deploy layer v1 wired end-to-end (ADR-033, ADR-034).** A `pass`
   verdict on the quality gate now dispatches `deploy:pr` to the new
   deploy-orchestrator (`startDeployWorker` registered at server.ts
@@ -526,7 +569,10 @@ Operator caveats:
   + deploy orchestrator + PipelineAdapter (`GitHubActions` + `NoOp`)
   implemented (above). Azure DevOps / GitLab CI / Jenkins adapters not
   implemented — the brief's scope was one concrete adapter
-- `@gestalt/agents-maintenance` — stubs only
+- `@gestalt/agents-maintenance` — drift-agent + alignment-agent +
+  gc-agent + evaluation-agent + node-cron scheduler + MonitoringAdapter
+  (`Prometheus` + `Datadog` + `NoOp`) implemented (above). All four
+  agents exercised live via `POST /maintenance/trigger`
 - `@gestalt/adapter-oracle` — stub (builds, ProjectRepository throws)
 - `@gestalt/adapter-mssql` — stub (builds, ProjectRepository throws)
 - `@gestalt/registry` — types and client only
@@ -542,9 +588,19 @@ Operator caveats:
 - `localAuth`   — create, findByEmail
 - `projects`    — create, findById, findByName, list, saveCredential,
   getCredential (token stored plain — TODO: encrypt at rest)
-- `deploymentEvents` — append, findByCorrelationId,
-  findStagingPromotion. Append-only (DB-level REVOKE UPDATE, DELETE).
-  ADR-034 enforcement runs through `findStagingPromotion`
+- `deploymentEvents` — append, findByCorrelationId, findStagingPromotion,
+  gcOlderThan. UPDATE is still revoked; DELETE was REVOKED in migration
+  004 then GRANTed back in migration 005 once it was clarified that
+  deployment_events are operational logs (not audit records) and
+  gc-agent needs to prune them. ADR-034 enforcement runs through
+  `findStagingPromotion`
+- `maintenanceRuns` — create (status=running), complete (final counts +
+  findings JSONB + duration), list (filter by projectId / agentRole).
+  Findings are JSONB-array-typed; the PG impl uses an explicit
+  `::jsonb` cast on insert/update (without it postgres' implicit
+  text→jsonb cast wraps the whole array as a JSON string scalar) and
+  `parseFindings` normalises the read path against postgres.js
+  returning either a parsed array or a raw JSON string
 
 **CLI install:**
 - `@gestalt/cli` is private — not on npm
@@ -601,9 +657,20 @@ Operator caveats:
   tests via `vitest`). Each needs the project's deps installed in the
   cloned tree — likely a `pnpm install --frozen-lockfile` step before
   the agents run, with the install output cached
-- Deploy and maintenance agent full implementations + workers wired
-  into server startup (same pattern as `startOrchestratorWorker` and
-  `startGateWorker`)
+- **alignment-agent entity extractor is too loose.** Matches every
+  `## Word` and `- **Word**` line in DOMAIN.md as an entity, including
+  template headings like "Description" / "Status" — produces false
+  positives like "entity 'description' has no module" intents. Tighten
+  the regex to require capitalised-PascalCase + skip a known stop list
+  (Description, Status, Notes, etc.)
+- **Live Prometheus / Datadog adapters not yet exercised.** Built
+  against the published REST API shapes; unit-tested smoke would
+  require a monitoring system. NoOp adapter is the verified path
+- **drift-agent additive note can churn DOMAIN.md** if the agent runs
+  daily and the module keeps changing. Should de-dupe against existing
+  notes (the current `includes(note)` check uses the exact day, so the
+  next day's note appears as a new line — fine for low-volume
+  projects, may need rolling-window dedupe for active ones)
 
 **Known architectural constraints Claude Code must respect:**
 - pnpm 9.x only (Node 20 compatibility)
@@ -1196,3 +1263,203 @@ Build status: `pnpm -r build` clean across all 12 packages. All four
 workers (generate orchestrator, gate, deploy, Fastify routes)
 register on startup. Full SDLC slice now reaches `deployed` with a
 single Git commit per cycle on a PR branch.
+
+---
+
+### Session 2026-05-30 — Claude Code (maintenance layer v1)
+
+Implements ADR-018 / ADR-019 / ADR-020 / ADR-035 — the four scheduled
+maintenance agents that close the SDLC loop. Closes the platform's
+build-time scope: every layer (generate, gate, deploy, maintenance) is
+now end-to-end wired with the same observability pattern.
+
+Changed:
+- `packages/adapters/postgres/src/migrations/005_maintenance.sql` (new):
+  `maintenance_runs` table (agent_role, project_id FK, status,
+  intents_queued, direct_fixes, findings JSONB, duration_ms, run_at,
+  completed_at) + a `GRANT DELETE` on `deployment_events` (migration
+  004 had revoked it under the audit-log analogy; gc-agent needs it
+  for the 90-day retention purge). Starts with a `DROP TABLE IF EXISTS
+  maintenance_runs CASCADE` because `001_initial.sql` created an
+  incompatible legacy shape — confirmed empty before dropping
+- `packages/core/src/repository/index.ts`: `MaintenanceRunRecord` +
+  `MaintenanceRunStatus` + `MaintenanceFinding` types; new
+  `MaintenanceRunRepository` interface (create / complete / list);
+  added `maintenanceRuns` to `RepositoryRegistry`; added
+  `gcOlderThan(cutoff: Date)` to `DeploymentEventRepository`; added
+  `listAll(): Promise<ProjectRecord[]>` to `ProjectRepository` so the
+  maintenance scheduler can iterate every project regardless of owner.
+  `packages/core/src/index.ts` re-exports the new types
+- `packages/adapters/postgres/src/repositories/maintenance-runs.ts`
+  (new): `PostgresMaintenanceRunRepository`. `findings` is JSONB; the
+  insert/update path uses an **explicit `::jsonb` cast** on the
+  stringified payload (without it postgres' implicit text→jsonb
+  conversion wraps the whole array as a JSON string scalar) and
+  `parseFindings` defensively handles both shapes postgres.js may
+  return on read (parsed array vs raw JSON string)
+- `packages/adapters/postgres/src/repositories/deployment-events.ts`:
+  `gcOlderThan` implemented via `WITH deleted AS (...) RETURNING 1`
+  count
+- `packages/adapters/postgres/src/repositories/projects.ts`:
+  `listAll()` implemented (no WHERE filter, ORDER BY created_at DESC)
+- `packages/adapters/postgres/src/index.ts`: wired
+  `PostgresMaintenanceRunRepository` into `createPostgresAdapter`
+- `packages/adapters/{oracle,mssql}/src/repositories/{deployment-events,maintenance-runs,projects}.ts`:
+  added throw-stubs for the new methods (`gcOlderThan`, `listAll`) +
+  new `*MaintenanceRunRepository` stub classes. `index.ts` of each
+  re-exports them — interface drift in core still surfaces as a build
+  break here
+- `packages/agents/maintenance/src/types.ts`: rewritten to the brief's
+  contract — `MaintenanceIntent` with the four typed values
+  (`CONTEXT_UPDATE`, `CONTEXT_ALIGNMENT`, `PERFORMANCE_DEGRADATION`,
+  `SECURITY_FINDING`), `MonitoringAdapter` (`getErrorRate`,
+  `getLatencyP99Ms`, `getAlertCount`), `MonitoringThresholds`,
+  `MaintenanceAgentInput` / `MaintenanceAgentResult`, `HarnessSubset`,
+  `MaintenanceHarnessConfig`. Old DriftFinding / AlignmentViolation /
+  GCFinding shapes removed
+- `packages/agents/maintenance/src/adapters/` (flat layout per brief):
+  `noop-monitoring-adapter.ts` (returns zeros), `prometheus-adapter.ts`
+  (Prometheus HTTP API `/api/v1/query` — error-rate, p99 via
+  `histogram_quantile`, alerts via `ALERTS{alertstate="firing"}`),
+  `datadog-adapter.ts` (Metrics API v1 + monitor states endpoint),
+  `resolver.ts` (reads `maintenance.monitoring.adapter` from HARNESS.json
+  with NoOp fallback). The old `adapters/monitoring/` subdir + the
+  Azure Monitor stub deleted
+- `packages/agents/maintenance/src/agents/util.ts` (new): shared
+  `authenticatedGitUrl` + `maintenanceIntentPrefix` / `maintenanceIntentText`
+  helpers — every maintenance-dispatched intent text carries a
+  `[gestalt-maintenance/<type>]` prefix that the evaluation-agent's
+  dedupe guard greps for
+- `packages/agents/maintenance/src/agents/drift-agent.ts`: rewritten.
+  Clones repo, walks `git log --since="30 days ago" --name-only` to
+  collect module changes, compares against context-file timestamps via
+  `git log -1 --format=%aI`. For drifted modules: appends an HTML-comment
+  note to DOMAIN.md (ADR-018 additive exception — direct commit
+  authored as `Gestalt Drift Agent`) and queues a `CONTEXT_UPDATE`
+  intent for structural follow-up
+- `packages/agents/maintenance/src/agents/alignment-agent.ts`:
+  rewritten. Extracts entities from DOMAIN.md headings + bullet lists,
+  modules from `src/modules/...` references in ARCHITECTURE.md,
+  principle IDs (`GP-NNN`) from GOLDEN_PRINCIPLES.md; queues
+  `CONTEXT_ALIGNMENT` intents per misalignment
+- `packages/agents/maintenance/src/agents/gc-agent.ts`: rewritten.
+  Three actions: prune `deployment_events` older than 90 days (via
+  `gcOlderThan`), delete stale `gestalt/*` remote branches older than
+  30 days (`git push origin --delete`), delete + commit `.gestalt/*`
+  spec files older than 90 days. No intent queuing — direct cleanup only
+- `packages/agents/maintenance/src/agents/evaluation-agent.ts`:
+  rewritten. Resolves adapter via the resolver, queries all three
+  metrics in parallel, builds candidate intents on threshold breach,
+  runs the **duplicate guard** against open intents (two `intents.list`
+  calls — one for `pending`, one for `generating` — concatenated and
+  checked for the type-prefix string). Skips when monitoring is
+  disabled
+- `packages/agents/maintenance/src/runner/index.ts` (new): the shared
+  per-run wrapper. Creates the `maintenance_runs` row, iterates
+  projects (or just one, for the manual trigger), invokes the agent,
+  dispatches each queued `MaintenanceIntent` as a fresh `intents` row
+  + `generate:intent` BullMQ task (`source: 'maintenance-agent'`,
+  priority mapped via the same `low → background` rule the human
+  intent route uses), completes the run row with totals + findings +
+  durationMs, emits `maintenance.run-completed` SSE event
+- `packages/agents/maintenance/src/scheduler/index.ts` (new):
+  `startMaintenanceScheduler` registers four `node-cron` schedules
+  (drift 02:00 UTC, alignment 03:00 UTC, gc Fri 04:00 UTC, evaluation
+  every 15 min); `triggerMaintenanceRun` is the shared entry point
+  used both by the cron callbacks and by `POST /maintenance/trigger`.
+  Also implements `loadHarnessSubset` — shallow-clones the project to
+  read its HARNESS.json once per run
+- `packages/agents/maintenance/src/index.ts`: rewritten to expose the
+  new surface (`startMaintenanceScheduler`, `triggerMaintenanceRun`,
+  `runMaintenanceAgent`, `loadProjectInputs`, the 4 `run*Agent`
+  helpers, the 3 monitoring adapters, `resolveMonitoringAdapter`, and
+  the public types)
+- `packages/agents/maintenance/package.json`: added `node-cron` +
+  `simple-git` runtime deps, `@types/node-cron` dev dep
+- `packages/server/package.json`: added `@gestalt/agents-maintenance`
+  workspace dep
+- `packages/server/src/server.ts`: imports `startMaintenanceScheduler`
+  and calls it as new step 9 (after the deploy worker). Startup-
+  sequence comment renumbered
+- `packages/server/src/routes/maintenance.ts` (new):
+  `GET /maintenance/runs?projectId&agentRole&limit` (any authenticated
+  user) reads the table; `POST /maintenance/trigger` (operator+) runs
+  the named agent for the given project via `triggerMaintenanceRun`
+  with `scopedProjectId` — same code path as the cron schedules
+- `packages/server/src/app.ts`: registers the new routes
+- `packages/server/src/oversight/routes.ts`: removed the aspirational
+  `/maintenance/runs` + `/maintenance/trigger` throw-stubs that were
+  shadowing the real handlers (Fastify rejected the duplicate
+  registration on startup)
+- `packages/server/src/routes/projects.ts`: harness template's
+  `maintenance` section gained a `monitoring` object (`adapter: 'noop'`,
+  `enabled: true`, `thresholds: {errorRatePercent: 5.0, latencyP99Ms:
+  2000, alertCountWindow: '1h', alertCountThreshold: 10}`) so the
+  evaluation-agent has a config to read against fresh projects
+- `docs/DECISIONS.md`: appended ADR-035 covering the typed-intent
+  contract, the monitoring-adapter pattern, the NoOp fallback, the
+  ADR-018 drift-agent exception, and the DB-grant clarification on
+  deployment_events
+
+Verified live against `trackeros` (4 manual triggers via
+`POST /maintenance/trigger`):
+- alignment-agent: 5 findings → 5 maintenance intents queued; SSE
+  `intent.created` fired for each with `source: 'maintenance-agent'`
+  and `maintenanceType: 'CONTEXT_ALIGNMENT'`; intents picked up by the
+  generate orchestrator within seconds (DB shows status flipping from
+  `pending` → `generating` on multiple rows)
+- gc-agent: 0 findings (no stale branches or `.gestalt/*` files)
+- evaluation-agent: 0 findings in 3 ms (NoOp adapter — no metric
+  breach)
+- drift-agent: 0 findings (no module changes in the 30-day window
+  exceeding the 7-day staleness threshold)
+- `GET /maintenance/runs?limit=10` returns all 4 records with correct
+  shapes (counts, durations, findings array)
+- SSE `maintenance.run-completed` event fired with runId, agentRole,
+  projectId, intentsQueued, directFixes, findingCount, durationMs
+- DB: 5 `maintenance-agent`-sourced intents persisted with the
+  expected `[gestalt-maintenance/CONTEXT_ALIGNMENT]` prefix
+
+Decisions made:
+- **Explicit `::jsonb` cast on every JSONB-array write.** Discovered
+  during smoke that `findings = ${JSON.stringify(arr)}` resulted in a
+  jsonb string scalar (`"[{...},{...}]"`) rather than a jsonb array,
+  because postgres' implicit text→jsonb is a quote-wrap rather than a
+  parse. The cast (`${JSON.stringify(arr)}::jsonb`) forces the parse.
+  Documented in the file's comments
+- **Defensive `parseFindings`.** postgres.js was returning the JSONB
+  as a string on read despite being stored correctly. Rather than
+  audit every other repo's JSONB read path (deployment_events
+  metadata, audit_log metadata, signals location) — none of which
+  currently fail because nothing iterates their parsed shape —
+  added a normalising parser in the maintenance repo only. Apply the
+  pattern to the others on demand
+- **Migration 005 starts with `DROP TABLE IF EXISTS … CASCADE`.**
+  `001_initial.sql` created a legacy `maintenance_runs` table with an
+  incompatible schema (no project_id, no findings, no completed_at,
+  NOT NULL duration_ms). No data was ever written to it; verified
+  COUNT(*) = 0 before adding the DROP. Fresh installs run 001's CREATE
+  then 005's DROP+CREATE (wasteful but correct); existing installs run
+  005 against the legacy table and the DROP unblocks the recreate.
+  Edit to 001 would only affect fresh installs — leaving it
+- **Manual trigger reuses the runner.** `POST /maintenance/trigger`
+  goes through `triggerMaintenanceRun({ scopedProjectId })` which is
+  the same entry the cron callbacks use. Observability story is
+  identical regardless of how the agent was invoked
+- **Dedupe by intent text prefix, not by intent kind.** The IntentRepository
+  doesn't store the maintenance type; the cleanest way to identify
+  in-flight maintenance intents for a given type is the
+  `[gestalt-maintenance/<type>]` prefix prepended to every dispatched
+  intent text. Two list calls (one per status), filter in JS
+- **Removed the old `/maintenance/runs` and `/maintenance/trigger`
+  throw-stubs from `oversight/routes.ts`.** They were aspirational
+  placeholders that registered before the real handlers in app.ts,
+  causing Fastify to reject the duplicate. Same fix pattern as the
+  pre-existing one for `/events` in routes/events.ts vs the old
+  oversight stub
+
+Build status: `pnpm -r build` clean across all 12 packages. All four
+layers (generate orchestrator, gate, deploy, maintenance scheduler)
+register on startup; migrations 001-005 apply on first run. Maintenance
+agents exercised live; queued intents flow through the generate
+orchestrator on the same code path as human-submitted intents.

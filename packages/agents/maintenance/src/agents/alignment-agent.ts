@@ -1,132 +1,166 @@
 /**
- * Alignment agent — detects when code has drifted from architectural standards.
+ * Alignment agent — checks that the project's context files are
+ * internally consistent.
  *
- * Runs daily at 03:00 UTC (configured in HARNESS.json).
+ * Schedule: daily at 03:00 UTC.
  *
- * Detection strategy:
- *   Reuses the same two-level constraint checking as the quality gate's constraint-agent,
- *   but runs proactively across the entire codebase rather than just new artifacts.
+ * Cross-checks:
+ *   - every entity declared in `docs/DOMAIN.md` should have a matching
+ *     module in `docs/ARCHITECTURE.md`, and vice-versa
+ *   - every golden principle (`GP-NNN`) in `docs/GOLDEN_PRINCIPLES.md`
+ *     should be referenced in `AGENTS.md`
  *
- * Key difference from quality gate:
- *   - Quality gate: validates new artifacts in a single intent cycle
- *   - Alignment agent: scans the full codebase for accumulated drift
- *
- * Resolution:
- *   All violations are queued as MaintenanceIntents — never fixed directly.
- *   Architecture violations require the generate loop (code-agent + quality gate).
+ * Findings are not auto-fixed — alignment problems typically require
+ * judgement about whether to add the module, remove the entity, or
+ * rename. The agent queues `CONTEXT_ALIGNMENT` maintenance intents so
+ * the generate layer handles them with full review.
  */
 
+import { mkdtemp, readFile, rm } from 'fs/promises';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import { simpleGit } from 'simple-git';
+import { createContextLogger } from '@gestalt/core';
+import type { MaintenanceFinding } from '@gestalt/core';
 import type {
-  MaintenanceAgentResult,
-  MaintenanceIntent,
-  MaintenanceHarnessConfig,
-  AlignmentViolation,
+  MaintenanceAgentInput, MaintenanceAgentResult, MaintenanceIntent,
 } from '../types';
+import { authenticatedGitUrl, maintenanceIntentText } from './util';
 
-/**
- * Runs the alignment agent against the full project codebase.
- */
-export async function runAlignmentAgent(
-  config: MaintenanceHarnessConfig,
-  readCodebase: (root: string) => Promise<string[]>,  // returns all TS file paths
-  queueIntent: (intent: Omit<MaintenanceIntent, 'id' | 'createdAt'>) => Promise<MaintenanceIntent>,
-): Promise<MaintenanceAgentResult> {
-  const startedAt = Date.now();
-  const correlationId = crypto.randomUUID();
+const log = createContextLogger({ module: 'alignment-agent' });
+
+export async function runAlignmentAgent(input: MaintenanceAgentInput): Promise<MaintenanceAgentResult> {
+  const workDir = await mkdtemp(join(tmpdir(), `gestalt-align-${input.projectId}-`));
+  const findings: MaintenanceFinding[] = [];
   const intentsQueued: MaintenanceIntent[] = [];
 
-  if (!config.alignmentCheck.enabled) {
-    return nothing('alignment-agent', startedAt);
-  }
-
   try {
-    const filePaths = await readCodebase(config.projectRoot);
-    const violations = await scanForViolations(filePaths, config.projectRoot);
+    const cloneUrl = authenticatedGitUrl(input.projectGitUrl, input.token);
+    log.info({ projectId: input.projectId, workDir }, 'Cloning project for alignment check');
+    await simpleGit().clone(cloneUrl, workDir, ['--depth', '1']);
 
-    // Group violations by affected file to produce focused intents
-    const byFile = groupByFile(violations);
+    const domain = await readOrEmpty(join(workDir, 'docs/DOMAIN.md'));
+    const architecture = await readOrEmpty(join(workDir, 'docs/ARCHITECTURE.md'));
+    const principles = await readOrEmpty(join(workDir, 'docs/GOLDEN_PRINCIPLES.md'));
+    const agentsMd = await readOrEmpty(join(workDir, 'AGENTS.md'));
 
-    for (const [file, fileViolations] of Object.entries(byFile)) {
-      const highSeverity = fileViolations.some((v) => v.severity === 'high');
-      const intent = await queueIntent({
-        correlationId,
-        source: 'alignment-agent',
-        type: 'architecture-violation',
-        priority: highSeverity ? 'high' : 'normal',
-        description:
-          `${fileViolations.length} architectural violation(s) detected in ${file}: ` +
-          fileViolations.map((v) => v.description).join('; '),
-        affectedFiles: [file],
-        evidence: fileViolations
-          .map((v) => `[${v.ruleId}] line ${v.line}: ${v.description}`)
-          .join('\n'),
-        suggestedAction: `Fix ${fileViolations.length} architectural rule violation(s) in ${file}`,
+    const entities = new Set(extractEntities(domain).map((e) => e.toLowerCase()));
+    const modules = new Set(extractModules(architecture).map((m) => m.toLowerCase()));
+    const principleIds = extractPrincipleIds(principles);
+
+    // Domain entity ↔ architecture module cross-check.
+    const entitiesWithoutModules = [...entities].filter((e) => !modules.has(e));
+    const modulesWithoutEntities = [...modules].filter((m) => !entities.has(m));
+
+    for (const entity of entitiesWithoutModules) {
+      findings.push({
+        type: 'domain-entity-without-module',
+        description: `entity '${entity}' is declared in DOMAIN.md but has no matching src/modules entry in ARCHITECTURE.md`,
+        affectedFiles: ['docs/DOMAIN.md', 'docs/ARCHITECTURE.md'],
+        severity: 'medium',
+        suggestedAction:
+          `Either add an architecture module for '${entity}' in docs/ARCHITECTURE.md, or remove the entity from docs/DOMAIN.md.`,
       });
-      intentsQueued.push(intent);
+      intentsQueued.push({
+        type: 'CONTEXT_ALIGNMENT',
+        projectId: input.projectId,
+        priority: 'normal',
+        affectedFiles: ['docs/DOMAIN.md', 'docs/ARCHITECTURE.md'],
+        evidence: `entity '${entity}' in DOMAIN.md has no matching architecture module`,
+        suggestedAction: maintenanceIntentText(
+          'CONTEXT_ALIGNMENT',
+          `Reconcile docs/DOMAIN.md and docs/ARCHITECTURE.md: entity '${entity}' exists in the domain model but no module references it. Decide whether to introduce the module under src/modules/${entity}/ or to remove the entity from the domain model.`,
+        ),
+      });
+    }
+    for (const moduleName of modulesWithoutEntities) {
+      findings.push({
+        type: 'architecture-module-without-entity',
+        description: `module '${moduleName}' is listed in ARCHITECTURE.md but has no matching entity in DOMAIN.md`,
+        affectedFiles: ['docs/ARCHITECTURE.md', 'docs/DOMAIN.md'],
+        severity: 'low',
+        suggestedAction: `Add an entity for '${moduleName}' to docs/DOMAIN.md, or remove the module from ARCHITECTURE.md.`,
+      });
+      intentsQueued.push({
+        type: 'CONTEXT_ALIGNMENT',
+        projectId: input.projectId,
+        priority: 'low',
+        affectedFiles: ['docs/ARCHITECTURE.md', 'docs/DOMAIN.md'],
+        evidence: `module '${moduleName}' in ARCHITECTURE.md has no matching DOMAIN.md entity`,
+        suggestedAction: maintenanceIntentText(
+          'CONTEXT_ALIGNMENT',
+          `Reconcile docs/ARCHITECTURE.md and docs/DOMAIN.md: module '${moduleName}' is declared but no domain entity references it. Either document the entity or remove the module reference.`,
+        ),
+      });
     }
 
-    return {
-      agentRole: 'alignment-agent',
-      status: violations.length === 0 ? 'nothing-to-do' : 'completed',
-      intentsQueued,
-      directFixes: [],
-      signals: [],
-      durationMs: Date.now() - startedAt,
-      runAt: new Date(),
-    };
-  } catch (err) {
-    return {
-      agentRole: 'alignment-agent',
-      status: 'failed',
-      intentsQueued: [],
-      directFixes: [],
-      signals: [{
-        id: crypto.randomUUID(),
-        correlationId,
-        type: 'CONTEXT_GAP',
-        severity: 'medium',
-        sourceAgent: 'alignment-agent',
-        message: `Alignment agent failed: ${err instanceof Error ? err.message : String(err)}`,
-        autoResolvable: false,
-      }],
-      durationMs: Date.now() - startedAt,
-      runAt: new Date(),
-    };
+    // Golden-principle cross-reference.
+    const agentsMdLower = agentsMd.toLowerCase();
+    const orphanPrinciples = principleIds.filter((id) => !agentsMdLower.includes(id.toLowerCase()));
+    for (const pid of orphanPrinciples) {
+      findings.push({
+        type: 'golden-principle-not-cross-referenced',
+        description: `principle ${pid} is defined in GOLDEN_PRINCIPLES.md but is not referenced in AGENTS.md`,
+        affectedFiles: ['AGENTS.md', 'docs/GOLDEN_PRINCIPLES.md'],
+        severity: 'low',
+        suggestedAction: `Add a reference to ${pid} in AGENTS.md so agents are aware of the rule.`,
+      });
+      intentsQueued.push({
+        type: 'CONTEXT_ALIGNMENT',
+        projectId: input.projectId,
+        priority: 'low',
+        affectedFiles: ['AGENTS.md', 'docs/GOLDEN_PRINCIPLES.md'],
+        evidence: `principle ${pid} in GOLDEN_PRINCIPLES.md is not referenced in AGENTS.md`,
+        suggestedAction: maintenanceIntentText(
+          'CONTEXT_ALIGNMENT',
+          `Update AGENTS.md to reference golden principle ${pid} so all agents reading the orientation document see the rule.`,
+        ),
+      });
+    }
+
+    return { intentsQueued, directFixes: 0, findings };
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
-/**
- * Scans all TypeScript files for architectural violations.
- * Reuses the same rule definitions as the quality gate constraint-agent.
- * Phase 2: full implementation using TypeScript compiler API.
- */
-async function scanForViolations(
-  _filePaths: string[],
-  _projectRoot: string,
-): Promise<AlignmentViolation[]> {
-  // Phase 2:
-  // - Load constraint rules from HARNESS.json
-  // - Run ESLint programmatic API across all files
-  // - Run AST checks across all files
-  // - Return all violations found
-  return [];
+// ─── Extractors ──────────────────────────────────────────────────────────────
+
+async function readOrEmpty(path: string): Promise<string> {
+  try {
+    return await readFile(path, 'utf8');
+  } catch {
+    return '';
+  }
 }
 
-function groupByFile(violations: AlignmentViolation[]): Record<string, AlignmentViolation[]> {
-  return violations.reduce<Record<string, AlignmentViolation[]>>((acc, v) => {
-    acc[v.affectedFile] = [...(acc[v.affectedFile] ?? []), v];
-    return acc;
-  }, {});
+function extractEntities(domainMd: string): string[] {
+  const names = new Set<string>();
+  // `## EntityName` headings (skip `## Project purpose` etc — only single
+  // capitalised words / PascalCase considered entities)
+  for (const m of domainMd.matchAll(/^##\s+([A-Z][A-Za-z0-9]+)\s*$/gm)) {
+    if (m[1]) names.add(m[1]);
+  }
+  // `- **EntityName**` bullet lists
+  for (const m of domainMd.matchAll(/^[-*]\s+\*\*([A-Z][A-Za-z0-9]+)\*\*/gm)) {
+    if (m[1]) names.add(m[1]);
+  }
+  return [...names];
 }
 
-function nothing(agentRole: MaintenanceAgentResult['agentRole'], startedAt: number): MaintenanceAgentResult {
-  return {
-    agentRole,
-    status: 'nothing-to-do',
-    intentsQueued: [],
-    directFixes: [],
-    signals: [],
-    durationMs: Date.now() - startedAt,
-    runAt: new Date(),
-  };
+function extractModules(architectureMd: string): string[] {
+  const modules = new Set<string>();
+  for (const m of architectureMd.matchAll(/src\/modules\/([a-z][a-z0-9-]*)/g)) {
+    if (m[1]) modules.add(m[1]);
+  }
+  return [...modules];
+}
+
+function extractPrincipleIds(principlesMd: string): string[] {
+  const ids = new Set<string>();
+  // Match GP-001, GP-042, etc. — top-level `## GP-NNN ...` or inline `GP-NNN`
+  for (const m of principlesMd.matchAll(/\bGP-\d{1,3}\b/g)) {
+    if (m[0]) ids.add(m[0]);
+  }
+  return [...ids];
 }
