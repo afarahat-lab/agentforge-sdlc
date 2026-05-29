@@ -224,6 +224,9 @@ importers:
       '@gestalt/adapter-postgres':
         specifier: workspace:*
         version: link:../adapters/postgres
+      '@gestalt/agents-generate':
+        specifier: workspace:*
+        version: link:../agents/generate
       '@gestalt/core':
         specifier: workspace:*
         version: link:../core

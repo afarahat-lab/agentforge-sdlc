@@ -258,7 +258,7 @@ Next task for Claude Code:
 
 ## Current state (keep this section current)
 
-**Last updated:** 2026-05-29 (Claude Code — postgres repo stubs implemented)
+**Last updated:** 2026-05-29 (Claude Code — orchestrator worker wired)
 
 **Repo:** https://github.com/afarahat-lab/gestalt
 
@@ -277,10 +277,13 @@ Next task for Claude Code:
 - `gestalt init-admin` exercised in a real terminal — admin created, JWT
   stored in `~/.gestalt/config.json`
 - `POST /intents` (which `gestalt run` calls) accepted and BullMQ-queued.
-  Job lands at `bull:gestalt-generate:*` in Redis. **No worker is registered
-  yet** to drain the queue, so submitted intents sit in `generating` status
-  forever until the generate-orchestrator runtime is wired up at server
-  startup
+  Job lands at `bull:gestalt-generate:*` in Redis. The generate-layer
+  orchestrator worker is now registered at server startup (step 6 in
+  `server.ts`) and consumes the queue with concurrency 3 — submitted
+  intents no longer sit in `generating` forever; they transition to
+  `failed` (and now have an `agent_executions` row + signals on the intent
+  detail) when the orchestrator can't reach project context (see the
+  next bullet)
 - `GET /status`, `GET /status/agents`, `GET /intents`, `GET /intents/:id`
   all return 200 (verified with curl). Previously `/status` and intent
   detail returned 500 because `executions`, `artifacts`, and `signals`
@@ -336,14 +339,26 @@ Next task for Claude Code:
   explicitly sets `allowedInProduction: true`
 
 **Pending enhancements (design in chat first):**
+- **Project file delivery to the server.** The orchestrator calls
+  `HarnessEngine(projectRoot).buildSnapshot()` and needs `HARNESS.json`,
+  `AGENTS.md`, `docs/ARCHITECTURE.md`, `docs/DOMAIN.md`,
+  `docs/GOLDEN_PRINCIPLES.md`, `docs/DECISIONS.md` on disk at `projectRoot`.
+  Today `projectRoot` defaults to `process.cwd()` (= `/app` in the Docker
+  container) which has none of those files, so every intent fails at the
+  context-assembler step with `ENOENT: …/HARNESS.json`. Three plausible
+  paths: (a) CLI uploads the project bundle to a `/projects/:projectId/files`
+  endpoint that lands them in the `projects_data` volume mounted at
+  `/app/projects`; (b) volume-mount the developer's project folder into the
+  server container at runtime; (c) store project context in the DB and have
+  the orchestrator read from there instead of disk. (a) is closest to how
+  the rest of the platform works
+- **LLM model name validation.** `loadConfig` accepts any non-empty string
+  for `LLM_MODEL`; e.g. `gpt-5.3-codex` (operator's local value) is not a
+  real OpenAI model and would 404 if the file-delivery gap is solved.
+  Worth adding a startup-time ping or at least a clear error path
 - Non-interactive mode for `gestalt init-admin` (CLI flags or stdin JSON) so
   it can be scripted. Current implementation is TTY-only by design of
   `promptSecret`
-- Generate-orchestrator worker registration at server startup. The intents
-  route dispatches `generate:*` task messages to BullMQ but no consumer
-  exists, so cycles never progress past `generating`. `@gestalt/agents-generate`
-  exports the orchestrator; the wiring lives in `server.ts` between
-  "Auth manager ready" and "Fastify app"
 - `init` command should reject extra positionals so `gestalt init local-admin`
   fails fast instead of running the project wizard with the arg ignored
 
@@ -763,3 +778,69 @@ Operator note:
   and JWT are untouched — the volume rebuild was server-only via
   `docker-compose up -d --build server`. No `docker-compose down -v`
   required to pick up the fix
+
+---
+
+### Session 2026-05-29 — Claude Code (orchestrator worker wired)
+
+The user ran `gestalt run "Set up the initial project scaffold"` and
+watched it sit in `generating` indefinitely. Pre-existing wiring gap, not
+a regression: the generate-layer orchestrator was implemented in
+`@gestalt/agents-generate` but never registered as a BullMQ worker at
+server startup. The intent dispatched cleanly to the `gestalt-generate`
+queue and then nothing pulled it off.
+
+Changed:
+- `packages/server/package.json`: added `"@gestalt/agents-generate":
+  "workspace:*"` to `dependencies` so the server image can import the
+  orchestrator. The Dockerfile already copies `packages/agents/generate/dist`
+  into the runtime image (lines 66-67), so no Dockerfile change was
+  needed
+- `packages/server/src/server.ts`: imported `startOrchestratorWorker` from
+  `@gestalt/agents-generate`, inserted a "step 6" between "Auth manager
+  ready" and "Fastify app" that calls `startOrchestratorWorker(config.queue)`.
+  Logs `"Orchestrator worker started"` so a `docker-compose logs server`
+  immediately tells the operator whether the worker is up. Updated the
+  numbered startup-sequence comment at the top of the file accordingly
+
+Verified:
+- `pnpm --filter @gestalt/server build` — clean
+- `docker-compose up -d --build server` — `Up (healthy)`
+- Logs show: `"Orchestrator worker started"` followed by the worker
+  picking up the user's queued intent (`module: "worker"`, `module:
+  "orchestrator"`)
+- The intent now transitions to `failed` instead of stuck-`generating`,
+  surfacing the next layer of the problem (see below)
+
+Decisions made:
+- **Wire the worker even though it will fail on the next step.** The
+  alternative — leave the worker stub and document the gap as "not yet
+  wired" — keeps the intent invisible (stuck at `generating`). Wiring
+  makes the failure path observable: status flips to `failed`, an
+  `agent_executions` row gets written, and the error appears in
+  `docker-compose logs server`. That is strictly more debuggable for the
+  operator than silence
+- **Did not solve the project-file-delivery problem.** The orchestrator's
+  `assembleContext` reads `HARNESS.json` and friends from disk at
+  `projectRoot`, which defaults to `process.cwd()` (= `/app` in Docker).
+  The container has none of those files because nobody has uploaded a
+  project to it. Fixing this needs a design decision (upload endpoint vs.
+  volume mount vs. DB-stored project context) and is now the next-step
+  blocker. Listed under **Pending enhancements** in **Current state**
+  with the three options spelled out
+- **Did not attempt to validate the operator's `LLM_MODEL` value.** Their
+  local `.env` has `LLM_MODEL=gpt-5.3-codex` (not a real OpenAI model);
+  even with project files solved, the LLM call would 404. Flagged
+  separately under **Pending enhancements**
+
+Build status:
+- `pnpm -r build` — all 12 buildable packages compile clean
+- `docker-compose up -d --build server` — server healthy, orchestrator
+  worker running
+
+Next-step blocker (for operator awareness, not this session):
+- Symptom: every `gestalt run` produces an intent that transitions to
+  `failed` within seconds, with `ENOENT: no such file or directory, open
+  '/app/HARNESS.json'` in `docker-compose logs server`. Cause: the server
+  cannot see the project's harness files. Resolution path is a design
+  decision; do not just stub a HARNESS.json into the image
