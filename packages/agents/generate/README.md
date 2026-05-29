@@ -6,7 +6,23 @@ The generate layer. Translates human intent into a coherent, ordered set of soft
 
 ## Responsibilities
 
-- Orchestrator — receives intent, runs the fixed execution graph, assembles artifact set for quality gate
+- **Orchestrator BullMQ worker** — drains `bull:gestalt-generate:*`. For
+  each intent task it:
+  - Looks up the project, clones its Git repo into a fresh temp
+    directory (ADR-032), checks out `defaultBranch`
+  - Drives the fixed execution graph; per step creates an
+    `agent_executions` row (`running` → `completed` / `failed` /
+    `skipped`) with tokens + duration, persists every `result.signals`
+    + `result.artifacts` to the matching repository
+  - Emits SSE events on the `@gestalt/core/events` bus at every
+    transition (`intent.status-changed`, `agent.started`,
+    `agent.completed`, `signal.emitted`) so the dashboard and `gestalt
+    run` SSE consumer see live progress
+  - On a successful cycle, writes generated artifacts into the cloned
+    tree, commits `feat: <intent text> [gestalt <corr8>]`, and pushes
+    to `defaultBranch`. The temp dir is removed in a `finally` block
+  - On a high-impact CONTEXT_GAP from intent-agent, stops the plan and
+    transitions the intent to `waiting-for-clarification`
 - intent-agent — parses raw intent into structured IntentSpec, detects ambiguities
 - design-agent — produces domain model changes, API contracts, component specs
 - context-agent — updates context files (AGENTS.md, DOMAIN.md, DECISIONS.md) if needed
@@ -26,18 +42,31 @@ The generate layer. Translates human intent into a coherent, ordered set of soft
 
 ## Key exports
 
-- `runIntentAgent — intent parsing agent`
-- `buildExecutionPlan, getReadySteps, isPlanComplete — orchestrator utilities`
-- `routeFeedback, requiresEscalation — quality gate feedback routing`
-- `transition, isTerminalState — state machine`
+- `startOrchestratorWorker(queueConfig)` — registers the BullMQ worker;
+  called once at server startup from `packages/server/src/server.ts`
+- `runIntentAgent, runDesignAgent, runContextAgent, runLintConfigAgent,
+  runCodeAgent, runTestAgent` — specialist agent entry points
+- `buildExecutionPlan, getReadySteps, isPlanComplete, hasPlanFailed,
+  getPriorArtifacts` — plan-builder utilities
+- `assembleContext(projectRoot, plan, forAgent, intentText)` — builds the
+  ContextSnapshot delivered to each agent (the operator's intent text is
+  always populated on `intentSpec.rawIntent`)
+- `routeFeedback, requiresEscalation, isAutoResolvable` — quality-gate
+  feedback routing
+- `transition, isTerminalState, isWaitingState` — state machine
+- Validators: `validateIntentSpec`, `validateDesignArtifact`, `validateArtifactSet`
+- Prompt builders: `buildIntentPrompt`, `buildDesignPrompt`,
+  `buildContextPrompt`, `buildCodePrompt`, `buildTestPrompt`,
+  `buildLintConfigPrompt`
 
 ## Must never
 
-- Pass raw intent text to any agent other than intent-agent
 - Let agents communicate directly — all coordination through the orchestrator
 - Proceed past intent-agent if high-impact ambiguities are detected
 - Auto-resolve GOLDEN_PRINCIPLE_BREACH — always escalate
 - Read context files directly during execution — use ContextSnapshot from the message
+- Push generated artifacts anywhere but the project's Git repo (ADR-032);
+  in particular, never write files to the developer's local machine
 
 ## Structure
 

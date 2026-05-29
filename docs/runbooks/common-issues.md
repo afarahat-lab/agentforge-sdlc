@@ -189,26 +189,68 @@ the banner cannot be dismissed — it is a permanent reminder.
 
 ## Agent execution issues
 
-### Intent cycle stuck in 'analyzing' state
+### Intent stuck in `generating`
 
-**Symptom:** Intent submitted but never progresses past 'analyzing'.
+**Symptom:** `gestalt status --id <correlationId>` keeps showing
+`generating`; agent_executions is empty.
 
-**Check LLM connectivity:**
+**Check the orchestrator worker registered at startup:**
 ```bash
-gestalt debug llm-ping
-# Expected: LLM connection OK, model: gpt-4o, latency: 234ms
+docker-compose logs server 2>&1 | grep "Orchestrator worker started"
+# Expected: one line per server start; missing means startup failed
 ```
 
-**Check queue:**
+**Check the queue depth:**
 ```bash
 docker-compose exec redis redis-cli LLEN bull:gestalt-generate:wait
-# If very high number: queue is backed up
+# Healthy idle state: 0. Steadily climbing means the worker is not
+# draining (LLM call hanging, repo clone hanging, etc.)
 ```
 
-**Check worker logs:**
+**Check worker logs for the specific job:**
 ```bash
-docker-compose logs -f server | grep "intent-agent"
+docker-compose logs -f server | grep -E "orchestrator|<correlationId>"
 ```
+
+---
+
+### Intent stuck in `in-review`
+
+**By design (today).** A successful generate cycle transitions the intent
+to `in-review` and dispatches a `gate:review` task to `bull:gestalt-gate`.
+No worker drains that queue yet (the quality-gate agents are stubs), so
+the intent stays in `in-review` indefinitely and `gestalt run` keeps its
+SSE stream open waiting for a terminal status that never arrives.
+
+**This is not a failure.** Generated artifacts have already been
+committed and pushed to the project's Git repo — `git pull` locally to
+receive them. Press Ctrl+C to release the `gestalt run` terminal; use
+`gestalt status --id <correlationId>` to inspect the executions / signals
+/ artifacts produced.
+
+The hang resolves once the quality-gate, deploy, and maintenance agent
+workers are implemented and registered at server startup (tracked under
+Pending enhancements in `CLAUDE.md`).
+
+---
+
+### Intent transitions to `waiting-for-clarification`
+
+**Cause:** The intent-agent emitted a high-impact `CONTEXT_GAP` signal —
+typically because the intent text is too vague for the LLM to extract a
+coherent IntentSpec. The orchestrator stops the plan and waits.
+
+**Resolution:**
+1. Run `gestalt status --id <correlationId>` to see the CONTEXT_GAP
+   message (it names what was unclear)
+2. Re-run with a more specific intent: `gestalt run "<sharper intent
+   incorporating the missing detail>"`. A new cycle starts from a fresh
+   clone of the current Git tip — the prior cycle's failure is recorded
+   but does not block subsequent runs
+
+The clarification API (`POST /intents/:id/clarify`) exists but the
+clarification resume path is not yet wired through the orchestrator —
+re-running with a sharper intent is the supported path today.
 
 ---
 

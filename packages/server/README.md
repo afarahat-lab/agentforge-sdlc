@@ -33,7 +33,10 @@ and exposes the oversight API.
 - `createAuthManager` — orchestrates provider registration
 - `issueToken`, `verifyToken`, `extractToken` — JWT helpers
 - `resolveRole`, `isDenied`, `hasPermission` — group → role resolution
-- `emitLiveEvent`, `eventBus` — server-internal event bus for SSE fanout
+- `emitLiveEvent`, `eventBus` — re-exported from `@gestalt/core/events` so
+  callers can keep `import { emitLiveEvent } from '@gestalt/server'`. The
+  canonical singleton lives in core so the generate-layer orchestrator
+  publishes on the same bus this SSE route subscribes to
 - `registerOversightRoutes`, alert-router helpers + types
 
 ## Must never
@@ -60,7 +63,8 @@ src/
 ├── index.ts                 # public re-exports
 ├── app.ts                   # Fastify factory, hook + route registration
 ├── types.ts                 # PlatformUser, LiveEvent, ApiSuccess/Error
-├── events.ts                # in-process event bus consumed by SSE
+├── events.ts                # 1-line re-export of @gestalt/core eventBus
+│                              # (preserves `import from '../events'` paths)
 ├── auth/
 │   ├── auth-manager.ts      # provider orchestration + session creation
 │   ├── config-loader.ts     # loads IdentityConfig from HARNESS.json

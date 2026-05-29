@@ -10,18 +10,25 @@ The nervous system of Gestalt. Every other package depends on this; it depends o
 - Agent communication protocol — TaskMessage envelope, BullMQ queue interface
 - Feedback signal taxonomy — typed signal definitions and severity rules
 - LLM provider abstraction — all LLM calls go through core/llm, never directly to providers
-- Repository pattern interface — core/repository defines contracts; adapters implement them
+- Repository pattern interface — `core/repository` defines contracts;
+  registry includes `intents`, `executions`, `artifacts`, `signals`,
+  `audit`, `users`, `localAuth`, `projects`
 - Configuration loader — core/config; no package reads process.env directly
 - Platform logger — structured logging; no package uses console.log
+- In-process event bus — `core/events` hosts the singleton `eventBus` +
+  `emitLiveEvent` so the server's SSE route and in-process workers (the
+  generate-layer orchestrator) publish to the same subscriber list
 
 ## Key exports
 
-- `TaskMessage, AgentRole, SignalType, TaskType — shared types`
-- `createQueue, createWorker — BullMQ wrappers`
-- `createLLMClient — provider-agnostic LLM client`
-- `createRepository — resolves the configured adapter`
-- `logger — structured platform logger`
-- `loadConfig — typed config loader`
+- `TaskMessage, AgentRole, SignalType, TaskType` — shared types
+- `QUEUE_NAMES, getQueue, dispatch, createWorker, createQueueEventListener` — BullMQ wrappers
+- `createLLMClient, getLLMClient` — provider-agnostic LLM client
+- `getRepositories, setRepositories, RepositoryRegistry` — repository registry
+- `eventBus, emitLiveEvent, LiveEvent, LiveEventType, EventBus, EventSubscriber` — in-process event bus
+- `HarnessEngine, createHarnessEngine, REQUIRED_CONTEXT_FILES` — harness engine
+- `logger, createContextLogger, logSignal` — structured platform logger
+- `loadConfig, GestaltConfig` — typed config loader
 
 ## Must never
 
@@ -40,6 +47,7 @@ src/
 ├── queue/            # BullMQ wrappers
 ├── repository/       # repository interface + registry
 ├── harness/          # harness engine (context files, versioning, validation)
+├── events/           # in-process event bus (SSE producer side)
 ├── config/           # typed config loader
 └── logger/           # structured logger
 ```

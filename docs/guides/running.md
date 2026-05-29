@@ -71,12 +71,17 @@ openssl rand -hex 64
 
 ## Step 4 — Build core packages
 
-Build once before starting the server:
+The server imports compiled JS from `@gestalt/core`, `@gestalt/adapter-postgres`,
+and `@gestalt/agents-generate` at startup (the last one for the orchestrator
+worker), so build the whole workspace once before the first `pnpm dev`:
 
 ```bash
-pnpm --filter @gestalt/core build
-pnpm --filter @gestalt/adapter-postgres build
+pnpm -r build
 ```
+
+After that, `pnpm dev` in `packages/server` (`tsx watch`) picks up `src/`
+changes automatically; rebuild upstream packages only when their source
+changes.
 
 ---
 
@@ -150,10 +155,9 @@ When making changes, rebuild affected packages in this order:
 
 ## Troubleshooting
 
-**`Cannot find module '@gestalt/core'`**
+**`Cannot find module '@gestalt/core'` (or `@gestalt/agents-generate`)**
 ```bash
-pnpm --filter @gestalt/core build
-pnpm --filter @gestalt/adapter-postgres build
+pnpm -r build
 ```
 
 **`dial unix /var/run/docker.sock: no such file or directory`**
