@@ -6,7 +6,7 @@ Gestalt replaces manual development cycles with a closed-loop system of speciali
 
 ---
 
-## What it does
+## How it works
 
 ```
 You write:   "Add a leave request approval workflow with manager and HR stages"
@@ -14,7 +14,60 @@ Agents do:   Design → Context → Code → Tests → Review → Deploy → Mai
 You see:     A dashboard showing every decision, signal, and outcome
 ```
 
-### SDLC coverage
+---
+
+## Getting started
+
+Gestalt has two parts: a **server** (runs once, hosts the platform) and a **CLI** (installed on each developer's machine).
+
+### 1. Start the server
+
+```bash
+git clone https://github.com/afarahat-lab/gestalt.git
+cd gestalt
+cp .env.example .env        # fill in LLM credentials, POSTGRES_PASSWORD, JWT_SECRET
+                            # set NODE_ENV=development for local/first-boot use
+docker-compose up -d
+curl http://localhost:3000/health   # should return {"status":"ok"}
+```
+
+### 2. Create the first admin user (once)
+
+```bash
+gestalt init-admin
+```
+
+### 3. Install the CLI (each developer machine)
+
+```bash
+# From the gestalt repo root
+pnpm install
+pnpm --filter @gestalt/cli build
+cd packages/cli && npm link && cd ../..
+
+gestalt login
+```
+
+### 4. Set up a project
+
+```bash
+mkdir my-project && cd my-project
+gestalt init        # LLM-powered wizard generates your project harness
+```
+
+### 5. Submit your first intent
+
+```bash
+gestalt run "Set up the initial project scaffold"
+gestalt status
+gestalt dashboard   # opens http://localhost:3000
+```
+
+**Full walkthrough:** [docs/guides/quick-start.md](docs/guides/quick-start.md)
+
+---
+
+## SDLC coverage
 
 | Phase | Gestalt capability |
 |---|---|
@@ -28,27 +81,6 @@ You see:     A dashboard showing every decision, signal, and outcome
 | Deployment | PR, CI/CD pipeline, environment promotion |
 | Maintenance | Background agents — doc drift, arch realignment, GC |
 | Monitoring | Evaluation agents analyse metrics, queue fixes |
-
----
-
-## Getting started
-
-```bash
-git clone https://github.com/afarahat-lab/gestalt.git
-cd gestalt
-cp .env.example .env   # fill in LLM and database credentials
-docker-compose up -d
-
-# Install the CLI from the local workspace (not published to npm)
-pnpm install
-pnpm --filter @gestalt/cli build
-cd packages/cli && npm link && cd ../..
-
-gestalt init local-admin
-open http://localhost:3000
-```
-
-See **[docs/guides/quick-start.md](docs/guides/quick-start.md)** for the full step-by-step walkthrough including LLM provider options, health checks, and first intent submission.
 
 ---
 
@@ -90,20 +122,18 @@ gestalt/
 │   │   ├── deploy/        # PR, pipeline, promotion agents
 │   │   └── maintenance/   # drift, alignment, GC, evaluation agents
 │   └── adapters/
-│       ├── postgres/      # PostgreSQL adapter (default)
-│       ├── oracle/        # Oracle adapter
-│       └── mssql/         # SQL Server adapter
+│       ├── postgres/      # PostgreSQL (default)
+│       ├── oracle/        # Oracle
+│       └── mssql/         # SQL Server
 ├── templates/
-│   └── corporate-ops-web-mobile/   # Tier 1 standard library harness
+│   └── corporate-ops-web-mobile/   # Tier 1 standard harness
 ├── docs/
-│   ├── guides/            # how-to guides by audience
+│   ├── guides/            # setup, deployment, identity integration
 │   ├── reference/         # configuration reference
-│   ├── runbooks/          # operations and troubleshooting
-│   └── ARCHITECTURE.md
+│   └── runbooks/          # troubleshooting
 ├── AGENTS.md              # agent orientation for this repo
-├── HARNESS.json
-├── docker-compose.yml
-└── .env.example
+├── CLAUDE.md              # Claude Code orientation
+└── docker-compose.yml
 ```
 
 ---
@@ -127,26 +157,14 @@ gestalt/
 
 | Guide | Audience |
 |---|---|
-| [Quick start](docs/guides/quick-start.md) | First-time users — Docker in 10 minutes |
+| [Quick start](docs/guides/quick-start.md) | Everyone — step-by-step setup |
 | [Development setup](docs/guides/running.md) | Contributors — running from source |
 | [Deployment guide](docs/guides/deployment.md) | Corporate IT — production install |
 | [Identity integration](docs/guides/identity/overview.md) | IT admins — Kerberos, SAML, Azure AD |
 | [HARNESS.json reference](docs/reference/harness-config.md) | Operators — full config reference |
-| [Operations runbook](docs/runbooks/common-issues.md) | Operators — troubleshooting |
+| [Common issues](docs/runbooks/common-issues.md) | Everyone — troubleshooting |
 | [Architecture](docs/ARCHITECTURE.md) | Contributors — system design |
 | [Architecture decisions](docs/DECISIONS.md) | Contributors — all ADRs |
-
----
-
-## Contributing
-
-Gestalt uses a three-tier harness registry:
-
-- **Tier 1 — Standard library**: ships with the platform, curated by maintainers
-- **Tier 2 — Verified registry**: community-contributed, reviewed and badged
-- **Tier 3 — Community registry**: open contributions, experimental
-
-See the registry documentation for contributing harness patterns and adapters.
 
 ---
 

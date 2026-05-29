@@ -1,35 +1,42 @@
 # Quick Start — Gestalt
 
-Get up and running in under 10 minutes using local authentication.
-For production deployments with corporate identity integration, see the [Deployment Guide](./deployment.md).
+Get Gestalt running on your machine in under 15 minutes.
 
 ---
 
-## Prerequisites
+## Overview
 
-| Requirement | Minimum version | Notes |
+Gestalt has two distinct roles:
+
+| Role | What it is | Who runs it |
 |---|---|---|
-| Docker Desktop | 4.25+ | macOS/Windows: [download here](https://www.docker.com/products/docker-desktop/). Must be running before `docker-compose up`. |
-| Docker Compose | 2.20+ | Bundled with Docker Desktop |
-| Git | 2.38+ | |
-| LLM endpoint | — | Azure OpenAI, Ollama, vLLM, or compatible |
+| **Server** | The platform — runs Docker, hosts the database, queue, and API | Runs once on a server (or your local machine for testing) |
+| **CLI** | Developer tool — submits intents, checks status | Installed on every developer's machine |
 
-No Node.js installation required — the platform runs entirely in Docker.
-
-> **macOS / Windows:** Open Docker Desktop and wait for the whale icon in the menu bar to stop animating before running any `docker` commands.
+For local testing, your machine plays both roles.
 
 ---
 
-## Step 1 — Clone the repository
+## Part 1 — Server setup (run once)
+
+### Prerequisites
+
+| Requirement | Version | Notes |
+|---|---|---|
+| Docker Desktop | 4.25+ | [Download here](https://www.docker.com/products/docker-desktop/) — must be **running** before any docker command |
+| Git | 2.38+ | |
+| LLM endpoint | — | Azure OpenAI, Ollama, or any OpenAI-compatible API |
+
+> **macOS / Windows:** Open Docker Desktop and wait for the whale icon in the menu bar to stop animating before proceeding.
+
+### Step 1 — Clone the repository
 
 ```bash
 git clone https://github.com/afarahat-lab/gestalt.git
 cd gestalt
 ```
 
----
-
-## Step 2 — Configure environment
+### Step 2 — Configure environment
 
 ```bash
 cp .env.example .env
@@ -38,27 +45,11 @@ cp .env.example .env
 Open `.env` and fill in the required values:
 
 ```bash
-# Required: LLM provider
-LLM_BASE_URL=https://your-resource.openai.azure.com/openai/deployments/gpt-4o
-LLM_API_KEY=your-azure-api-key
-LLM_MODEL=gpt-4o
+# LLM provider — choose one:
 
-# Required: change these before any shared use
-POSTGRES_PASSWORD=choose-a-strong-password
-JWT_SECRET=choose-a-long-random-string
-
-# Optional: leave as defaults for local development
-SERVER_PORT=3000
-POSTGRES_USER=gestalt
-POSTGRES_DB=gestalt
-```
-
-**LLM provider options:**
-
-```bash
-# Azure OpenAI (recommended for corporate environments)
+# Azure OpenAI
 LLM_BASE_URL=https://<resource>.openai.azure.com/openai/deployments/<deployment>
-LLM_API_KEY=<azure-api-key>
+LLM_API_KEY=<your-api-key>
 LLM_MODEL=gpt-4o
 
 # Ollama (local, no API key needed)
@@ -66,81 +57,110 @@ LLM_BASE_URL=http://host.docker.internal:11434/v1
 LLM_API_KEY=ollama
 LLM_MODEL=llama3
 
-# vLLM (self-hosted)
-LLM_BASE_URL=http://<vllm-host>:8000/v1
-LLM_API_KEY=<your-key>
-LLM_MODEL=<model-name>
+# Required
+POSTGRES_PASSWORD=choose-a-strong-password
+JWT_SECRET=choose-a-64-character-random-string
+SERVER_BASE_URL=http://localhost:3000
+
+# Required for local auth (development / first boot only)
+NODE_ENV=development
 ```
 
----
+Generate a secure JWT secret:
+```bash
+openssl rand -hex 64
+```
 
-## Step 3 — Start the platform
+### Step 3 — Start the platform
 
 ```bash
 docker-compose up -d
 ```
 
-This starts three containers:
-- `gestalt-server` — the main server (port 3000)
-- `gestalt-postgres` — PostgreSQL database
-- `gestalt-redis` — Redis message queue
-
-Wait for all containers to be healthy:
-
+Verify all three containers are healthy:
 ```bash
 docker-compose ps
-# All three containers should show "healthy"
+# agentforge-server    Up (healthy)
+# agentforge-postgres  Up (healthy)
+# agentforge-redis     Up (healthy)
 ```
+
+Confirm the server is responding:
+```bash
+curl http://localhost:3000/health
+# {"status":"ok","version":"0.0.0"}
+```
+
+### Step 4 — Create the first admin user
+
+This step is run **once** after the first `docker-compose up`. It creates the platform admin account.
+
+```bash
+gestalt init-admin
+```
+
+You will be prompted for:
+- Email address
+- Display name
+- Password (minimum 8 characters, hidden input)
+- Confirm password
+
+On success you will see:
+```
+✓ Admin user created. You are now signed in as admin@company.com.
+```
+
+> If you see `403 ADMIN_ALREADY_EXISTS`, an admin already exists.
+> Run `gestalt login` instead. See [common issues](../runbooks/common-issues.md#admin-setup) if you need to reset.
 
 ---
 
-## Step 4 — Initialize and create admin user
+## Part 2 — CLI setup (run once per developer machine)
+
+The CLI is not published to npm. It is built from the repo and linked globally.
+
+### Prerequisites
+
+| Requirement | Version | Notes |
+|---|---|---|
+| Node.js | 20+ | |
+| pnpm | 9.x | `npm install -g pnpm@9.15.4` — do not use pnpm 10+ |
+
+### Step 5 — Build and install the CLI
 
 ```bash
-# Install the CLI from the local workspace (run once).
-# The CLI is not published to npm — install it via `npm link` after building.
+# From the gestalt repo root
 pnpm install
 pnpm --filter @gestalt/cli build
 cd packages/cli && npm link && cd ../..
-
-# Create the first admin user (local fallback mode)
-gestalt init-admin
-# Follow the prompts: email, display name, password (with confirmation)
-
-# You will see a non-production warning — this is expected for local auth.
-# The token returned by the server is stored in ~/.gestalt/config.json
-# so subsequent commands (gestalt run, gestalt status) are already signed in.
 ```
 
-> `gestalt init-admin` only works on a fresh installation. Once a user
-> exists, the `/auth/admin/setup` endpoint returns 403 and you must use
-> `gestalt login` instead. See
-> [`docs/runbooks/common-issues.md`](../runbooks/common-issues.md#admin-setup-fails-with-admin-already-exists)
-> if the command refuses to run.
+Verify:
+```bash
+gestalt --version
+gestalt --help
+```
 
-> If `npm install -g @gestalt/cli` returns a `404 Not Found`, that is expected.
-> The CLI lives in this monorepo and is marked `"private": true`. Use the
-> `npm link` workflow above. See
-> [`docs/runbooks/common-issues.md`](../runbooks/common-issues.md#cli-issues)
-> for details.
+### Step 6 — Sign in
 
----
-
-## Step 5 — Open the dashboard
-
-Navigate to `http://localhost:3000` in your browser.
-
-Log in with the admin credentials you just created.
-
-You will see a yellow banner:
-> ⚠️ Local authentication is active. This mode is not recommended for production.
-> [Configure corporate identity integration →]
-
-This is expected. For production, follow the [Identity Integration Guide](./identity/overview.md).
+```bash
+gestalt login
+# Server: http://localhost:3000
+# Enter your admin email and password
+```
 
 ---
 
-## Step 6 — Initialize your first project
+## Part 3 — Project setup (run once per project)
+
+### Step 7 — Create a project folder
+
+```bash
+mkdir my-project
+cd my-project
+```
+
+### Step 8 — Initialise the project
 
 ```bash
 gestalt init
@@ -149,24 +169,62 @@ gestalt init
 The initializer will:
 1. Confirm your LLM connection
 2. Ask you to describe your project in natural language
-3. Generate a complete harness for your project
-4. Validate the harness and report ready
+3. Extract a structured spec and confirm it with you
+4. Generate all harness files in your project folder:
+   - `AGENTS.md` — agent orientation
+   - `HARNESS.json` — project configuration
+   - `docs/ARCHITECTURE.md`, `docs/DOMAIN.md`, `docs/GOLDEN_PRINCIPLES.md`, `docs/DECISIONS.md`
+5. Validate the harness and report ready
 
 ---
 
-## Step 7 — Submit your first intent
+## Part 4 — Daily use
+
+### Step 9 — Submit your first intent
+
+From inside your project folder:
 
 ```bash
-gestalt run "Set up the initial project scaffold with folder structure and base configuration"
+gestalt run "Set up the initial project scaffold with folder structure"
 ```
 
-Watch the dashboard at `http://localhost:3000` to see agents working.
+Watch live agent activity:
+```bash
+gestalt logs
+```
+
+Check status:
+```bash
+gestalt status
+```
+
+Open the dashboard:
+```bash
+gestalt dashboard
+# Opens http://localhost:3000 in your browser
+```
+
+---
+
+## Summary — command reference
+
+| Command | When | Purpose |
+|---|---|---|
+| `docker-compose up -d` | Once (server) | Start the platform |
+| `gestalt init-admin` | Once (server) | Create first admin user |
+| `gestalt login` | Each machine | Authenticate the CLI |
+| `gestalt init` | Once per project | Set up a project harness |
+| `gestalt run "<intent>"` | Daily | Submit work to agents |
+| `gestalt status` | Daily | Check platform and intent status |
+| `gestalt logs` | Daily | Stream live agent activity |
+| `gestalt dashboard` | Daily | Open oversight dashboard |
 
 ---
 
 ## Next steps
 
-- [Deployment Guide](./deployment.md) — production installation for corporate IT
-- [Identity Integration](./identity/overview.md) — connect to your corporate IdP
-- [Configuration Reference](../reference/harness-config.md) — all HARNESS.json options
-- [Operations Runbook](../runbooks/common-issues.md) — troubleshooting guide
+- [Development setup](./running.md) — running Gestalt from source for contributors
+- [Deployment guide](./deployment.md) — production install for corporate IT
+- [Identity integration](./identity/overview.md) — connect to your corporate IdP
+- [HARNESS.json reference](../reference/harness-config.md) — full configuration reference
+- [Common issues](../runbooks/common-issues.md) — troubleshooting

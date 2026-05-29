@@ -1,8 +1,8 @@
 # Development Setup — Gestalt
 
-This guide covers running Gestalt from source for active development and contribution.
+This guide covers running Gestalt from source for contributors and active development.
 
-For the Docker-based quick start, see [Quick Start](./quick-start.md).
+For the standard setup (Docker), see [Quick Start](./quick-start.md).
 For production corporate deployment, see [Deployment Guide](./deployment.md).
 
 ---
@@ -12,14 +12,13 @@ For production corporate deployment, see [Deployment Guide](./deployment.md).
 | Requirement | Version | Notes |
 |---|---|---|
 | Node.js | 20+ | |
-| pnpm | 9.x (not 10+) | `npm install -g pnpm@9` — pnpm 10+ requires Node 22 |
-| Docker | 24.0+ | Docker Desktop for macOS/Windows — must be running before `docker-compose up` |
-| Docker Compose | 2.20+ | Bundled with Docker Desktop |
+| pnpm | 9.x | `npm install -g pnpm@9.15.4` — pnpm 10+ requires Node 22, do not use it |
+| Docker Desktop | 4.25+ | For PostgreSQL and Redis only — must be running |
 | Git | 2.38+ | |
 
 ---
 
-## Step 1 — Clone and install dependencies
+## Step 1 — Clone and install
 
 ```bash
 git clone https://github.com/afarahat-lab/gestalt.git
@@ -31,13 +30,13 @@ pnpm install
 
 ## Step 2 — Start infrastructure
 
-Start only PostgreSQL and Redis. The server and dashboard run as Node.js processes.
+Run only PostgreSQL and Redis in Docker. The server and dashboard run as Node processes.
 
 ```bash
 docker-compose up -d postgres redis
 
-# Verify both are healthy
 docker-compose ps postgres redis
+# Both should show Up (healthy)
 ```
 
 ---
@@ -48,7 +47,7 @@ docker-compose ps postgres redis
 cp .env.example .env
 ```
 
-For development, add these values to `.env`:
+Add these values to `.env`:
 
 ```bash
 # Required
@@ -56,18 +55,14 @@ LLM_BASE_URL=<your-llm-endpoint>
 LLM_API_KEY=<your-api-key>
 LLM_MODEL=gpt-4o
 JWT_SECRET=<64-character-random-string>
+NODE_ENV=development          # required — enables local auth provider
 
-# Database (constructed from docker-compose defaults)
-DATABASE_URL=postgresql://gestalt:<POSTGRES_PASSWORD>@localhost:5432/gestalt
-POSTGRES_PASSWORD=<same-password-as-above>
-
-# Optional
-NODE_ENV=development
-LOG_LEVEL=debug
+# Database (matches docker-compose postgres defaults)
+POSTGRES_PASSWORD=<your-password>
+DATABASE_URL=postgresql://gestalt:<your-password>@localhost:5432/gestalt
 ```
 
-Generate a secure JWT secret:
-
+Generate a JWT secret:
 ```bash
 openssl rand -hex 64
 ```
@@ -76,7 +71,7 @@ openssl rand -hex 64
 
 ## Step 4 — Build core packages
 
-The server depends on compiled core packages. Build them once before starting:
+Build once before starting the server:
 
 ```bash
 pnpm --filter @gestalt/core build
@@ -87,55 +82,38 @@ pnpm --filter @gestalt/adapter-postgres build
 
 ## Step 5 — Run in development mode
 
-Open three terminals from the repo root.
+Open three terminals.
 
-**Terminal 1 — Server** (hot-reloads on file changes):
-
+**Terminal 1 — Server:**
 ```bash
 cd packages/server
 pnpm dev
-# → Server running on http://localhost:3000
+# Server running on http://localhost:3000
 ```
 
-**Terminal 2 — Dashboard** (Vite HMR, proxies API to :3000):
-
+**Terminal 2 — Dashboard (optional):**
 ```bash
 cd packages/dashboard
 pnpm dev
-# → Dashboard on http://localhost:5173
+# Dashboard on http://localhost:5173 (proxies API to :3000)
 ```
 
 **Terminal 3 — CLI:**
-
 ```bash
-# Option A: run directly without building
-cd packages/cli
-pnpm dev -- login
-
-# Option B: build and link globally
-cd packages/cli
-pnpm build
-npm link
+pnpm --filter @gestalt/cli build
+cd packages/cli && npm link && cd ../..
+gestalt init-admin       # first time only
 gestalt login
 ```
 
 ---
 
-## Running all packages simultaneously
-
-From the repo root:
+## Common build commands
 
 ```bash
-pnpm dev
-```
+# Build all packages in dependency order
+pnpm build
 
-This starts server, dashboard, and all packages in watch mode in parallel.
-
----
-
-## Common commands
-
-```bash
 # Type check all packages
 pnpm typecheck
 
@@ -144,17 +122,6 @@ pnpm test
 
 # Test a specific package
 pnpm --filter @gestalt/core test
-pnpm --filter @gestalt/agents-generate test
-
-# Test in watch mode
-pnpm --filter @gestalt/core test -- --watch
-
-# Lint all packages
-pnpm lint
-
-# Build all packages for production
-pnpm build
-# Outputs: packages/*/dist/, packages/dashboard/dist/
 
 # Clean all build outputs
 pnpm clean
@@ -162,82 +129,51 @@ pnpm clean
 
 ---
 
-## Package dependency order
+## Package build order
 
-When making changes, rebuild in this order if needed:
+When making changes, rebuild affected packages in this order:
 
 ```
 @gestalt/core
   └── @gestalt/adapter-postgres
-        └── @gestalt/server
-              └── @gestalt/cli
-
-@gestalt/core
   └── @gestalt/agents-generate
   └── @gestalt/agents-quality-gate
   └── @gestalt/agents-deploy
   └── @gestalt/agents-maintenance
+        └── @gestalt/server
+              └── @gestalt/cli
 ```
 
-The dashboard has no internal package dependencies — it communicates only via the server API.
-
----
-
-## First run after setup
-
-```bash
-# Create admin user (local auth, development only)
-gestalt init local-admin
-
-# Initialise a project
-gestalt init
-
-# Submit your first intent
-gestalt run "Set up the initial project scaffold"
-
-# Watch live activity
-gestalt logs
-
-# Open dashboard
-gestalt dashboard   # opens http://localhost:5173 in dev mode
-```
+`@gestalt/dashboard` has no internal package dependencies — it only calls the server API.
 
 ---
 
 ## Troubleshooting
 
 **`Cannot find module '@gestalt/core'`**
-
-Core packages need to be built first:
-
 ```bash
 pnpm --filter @gestalt/core build
 pnpm --filter @gestalt/adapter-postgres build
 ```
 
-**Database connection refused**
+**`dial unix /var/run/docker.sock: no such file or directory`**
 
+Docker Desktop is not running. Open it and wait for the whale icon to stop animating.
+
+**`Database connection refused`**
 ```bash
-# Check PostgreSQL is running
-docker-compose ps postgres
-
-# Check DATABASE_URL matches your POSTGRES_PASSWORD in .env
-echo $DATABASE_URL
+docker-compose ps postgres    # check it's healthy
+# Verify DATABASE_URL matches POSTGRES_PASSWORD in .env
 ```
 
 **Port 3000 already in use**
-
 ```bash
-# Find and stop the conflicting process
 lsof -ti:3000 | xargs kill
-# Or change the port in .env: SERVER_PORT=3001
+# Or set SERVER_PORT=3001 in .env
 ```
 
-**LLM connection failures in dev**
+**Local auth not working / `LocalProvider not registered`**
 
-The server logs will show the full error. Common causes:
-- `LLM_BASE_URL` not set or wrong format
-- API key expired or incorrect
-- Corporate proxy blocking outbound requests — set `HTTP_PROXY` in `.env`
+`NODE_ENV=development` must be set in `.env`. Local auth is disabled in production by design (ADR-025).
 
-For all other issues: [Operations Runbook](../runbooks/common-issues.md)
+For more issues: [Common issues runbook](../runbooks/common-issues.md)
