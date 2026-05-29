@@ -135,9 +135,9 @@ docker-compose logs -f server
 ## Current build status
 
 `pnpm -r build` compiles cleanly across all 12 buildable workspace packages.
-The most recent verifying build is from the 2026-05-28 first-boot admin
-setup session — see the **Current state** section below for the
-authoritative snapshot and the **Session log** for what changed since.
+The most recent verifying build is from the 2026-05-29 ADR-032 session — see
+the **Current state** section below for the authoritative snapshot and the
+**Session log** for what changed since.
 
 | Package | Status |
 |---|---|
@@ -156,6 +156,8 @@ authoritative snapshot and the **Session log** for what changed since.
 
 `docker-compose up -d` brings server + postgres + redis up `Up (healthy)`;
 `/health` returns 200; protected routes return 401 without a JWT.
+All three migrations apply on first start: `001_initial`, `002_local_auth`,
+`003_projects`.
 
 ## Known issues to resolve
 
@@ -164,7 +166,8 @@ None blocking the build today. Areas to keep in mind when working in this repo:
 1. **`UserRepository` extensions touch every adapter.** Adding a method to
    the interface (as the `count()` addition for first-boot admin setup did)
    means the Oracle and SQL Server stubs must learn the same method when
-   they leave stub state.
+   they leave stub state. Same applies to `ProjectRepository` — oracle and
+   mssql stubs already have throw-stubs added (2026-05-29 ADR-032 session).
 2. **Type alignment between `@gestalt/agents-generate` and `@gestalt/core`.**
    The local `ContextSnapshot` and `FeedbackSignal` types in
    `packages/agents/generate/src/types.ts` must keep matching the core types
@@ -177,6 +180,14 @@ None blocking the build today. Areas to keep in mind when working in this repo:
    Bridges `IntentRecord.priority` (`'low'`) and core `TaskPriority`
    (`'background'`). If priority levels are extended, both types must move
    together.
+5. **Git token stored plain text.** `project_git_credentials.token` has a
+   `TODO: encrypt at rest before production use` comment in
+   `packages/adapters/postgres/src/repositories/projects.ts`. Do not remove
+   the comment; address it before any shared/production deployment.
+6. **LLM model name not validated at startup.** `loadConfig` accepts any
+   non-empty string for `LLM_MODEL`. An invalid model name will only surface
+   as a 404 when the first LLM call is made. Set a valid model in `.env`
+   before running `gestalt run`.
 
 ---
 
@@ -191,9 +202,9 @@ All ADRs are in `docs/DECISIONS.md`. Key ones:
 - ADR-007: Five typed feedback signals — never generic errors
 - ADR-025: Local auth non-production only
 - ADR-026: PlatformUser is a shadow record
-- ADR-032: Git repository is the project filesystem — orchestrator clones
-  the project repo per cycle; `gestalt init` registers the project +
-  pushes the harness via the server
+- ADR-032: Git repository is the project filesystem — server clones per cycle,
+  agents commit and push, developers git pull. `projectRoot` in
+  `ContextSnapshot` is the temp clone path, not the developer's local machine
 
 ---
 
@@ -221,41 +232,158 @@ When returning to the design chat, paste this section so the context is current.
 Changed:
 - <file>: <what changed and why>
 Decisions made:
-- <any architectural decision that deviated from or extended the design>
+- <any architectural decision that deviated from or extended the original design>
 Build status:
 - <which packages compile, which don't, what errors remain>
 ```
 
 ---
 
-### Session 2026-05 — Design chat
-Status: All 8 layers designed and documented. Phase 2 build started.
+### Session 2026-05-28 — Claude Code (CLI install fix)
+Changed:
+- `packages/cli/package.json`: flipped `"private": false` → `"private": true`
+- `README.md`, `docs/guides/quick-start.md`, `docs/guides/deployment.md`:
+  replaced `npm install -g @gestalt/cli` with build + npm link workflow
+- `docs/runbooks/common-issues.md`: added CLI issues section
 
-Packages implemented:
-- `@gestalt/core` — config, logger, LLM client, BullMQ queue, repository interfaces, harness engine
-- `@gestalt/adapter-postgres` — connection pool, migrations, intent/audit/user repositories
-- `@gestalt/server` — Fastify app, JWT auth, correlation/audit middleware, intent routes, SSE
-- `@gestalt/cli` — login, init, run, status, logs, dashboard commands
-- `@gestalt/agents-generate` — orchestrator, all 6 specialist agents, all prompts, validators
-- `@gestalt/dashboard` — all 8 views, API client, SSE hooks, layout
+Build status: No source changes — TypeScript build unaffected.
 
-Type fixes applied (not yet verified in Docker):
-- `packages/core/tsconfig.json`: removed `exactOptionalPropertyTypes`
-- `packages/agents/generate/src/types.ts`: added `projectRoot`, `architectureMd`, `domainMd` to `ContextSnapshot`; added `autoResolvable`, `createdAt` to `FeedbackSignal`
-- `packages/agents/generate/src/orchestrator/context-assembler.ts`: added `IntentSpec` import, type assertion, new snapshot fields
-- All agent files: added `autoResolvable` and `createdAt` to `FeedbackSignal` literals
+---
+
+### Session 2026-05-28 — Claude Code (first-boot admin setup)
+Changed:
+- `packages/adapters/postgres/src/migrations/002_local_auth.sql` (new)
+- `packages/core/src/repository/index.ts`: added `LocalAuthRepository`,
+  `LocalAuthRecord`, `count()` on `UserRepository`, `localAuth` to registry
+- `packages/adapters/postgres/src/repositories/local-auth.ts` (new)
+- `packages/server/src/routes/admin.ts` (new): `POST /auth/admin/setup`
+- `packages/server/src/auth/providers/local.ts`: implemented bcrypt auth
+- `packages/server/src/auth/auth-manager.ts`: preserves role on local login
+- `packages/server/src/auth/routes.ts`: implemented `POST /auth/login`
+- `packages/cli/src/commands/init-admin.ts` (new): `gestalt init-admin`
+
+Decisions made:
+- Separate `local_auth` table (not nullable column on users)
+- bcrypt 12 rounds
+- Manual audit write in admin route (audit hook skips unauthenticated requests)
+- Preserve role on local login in AuthManager, not role-mapper
+
+Build status: All 12 packages compile clean.
+
+---
+
+### Session 2026-05-29 — Claude Code (bootstrap smoke test + fixes)
+Changed:
+- `packages/adapters/postgres/package.json`: build script copies SQL to dist
+- `packages/adapters/postgres/src/migrations/001_initial.sql`: fixed REVOKE
+  role reference + removed duplicate schema_migrations writes
+- `docker-compose.yml`: `NODE_ENV` made overridable via `.env`
+
+Decisions made:
+- Fix migration packaging in build script, not Dockerfile
+- Use `current_user` in REVOKE (not hardcoded role name)
+- Strip manual schema_migrations writes from migration files — runner owns that
+
+Build status: All 12 packages compile clean. docker-compose up healthy.
+Both migrations apply. End-to-end admin smoke test passes.
+
+---
+
+### Session 2026-05-29 — Claude Code (BullMQ queue-name fix)
+Changed:
+- `packages/core/src/queue/index.ts`: `gestalt:{layer}` → `gestalt-{layer}`
+  (BullMQ 5.x rejects colons in queue names)
+- `docs/runbooks/common-issues.md`: fixed redis-cli diagnostic command
+
+Build status: `POST /intents` returns 201. Queue keys created in Redis.
+
+---
+
+### Session 2026-05-29 — Claude Code (postgres repo stubs implemented)
+Changed:
+- `packages/adapters/postgres/src/repositories/executions.ts` (new)
+- `packages/adapters/postgres/src/repositories/artifacts.ts` (new)
+- `packages/adapters/postgres/src/repositories/signals.ts` (new)
+  — `markResolved` enforces GOLDEN_PRINCIPLE_BREACH human-only resolution
+- `packages/adapters/postgres/src/index.ts`: removed inline stubs
+
+Build status: `GET /status`, `GET /intents/:id` all return 200.
+
+---
+
+### Session 2026-05-29 — Claude Code (orchestrator worker wired)
+Changed:
+- `packages/server/package.json`: added `@gestalt/agents-generate` dep
+- `packages/server/src/server.ts`: `startOrchestratorWorker` called at startup
+
+Build status: Orchestrator worker running. Intents drain from queue and
+transition to `failed` (ENOENT /app/HARNESS.json — expected, by design
+at this stage).
+
+---
+
+### Session 2026-05-29 — Claude Code (ADR-032 project registration + Git)
+
+Implemented the ADR-032 design: the server is the only thing that touches
+the project's Git repo. `gestalt init` now registers a project + has the
+server push the harness; subsequent intent cycles clone fresh per run.
+Resolves the `ENOENT /app/HARNESS.json` blocker.
+
+Changed:
+- `packages/adapters/postgres/src/migrations/003_projects.sql` (new):
+  `projects` + `project_git_credentials` tables. Pure schema only.
+- `packages/core/src/repository/index.ts`: added `ProjectRecord` type and
+  `ProjectRepository` interface; added `projects` to `RepositoryRegistry`
+- `packages/core/src/index.ts`: re-exports `ProjectRecord`, `ProjectRepository`
+- `packages/adapters/postgres/src/repositories/projects.ts` (new):
+  full `PostgresProjectRepository`. Token stored plain with TODO comment.
+  `getCredential` returns most recent row (allows PAT rotation)
+- `packages/adapters/postgres/src/index.ts`: wired `PostgresProjectRepository`
+- `packages/adapters/oracle/`, `packages/adapters/mssql/`: added
+  `@gestalt/core` dep + TypeScript devDeps + `repositories/projects.ts`
+  stub (every method throws `not implemented`). Both adapters now fully
+  participate in `pnpm -r build`
+- `packages/server/package.json`: added `simple-git@^3.23.0`
+- `packages/server/Dockerfile`: `apk add --no-cache git openssh-client`
+- `packages/server/src/routes/projects.ts` (new): `POST /projects`,
+  `GET /projects`, `GET /projects/:id`, `POST /projects/:id/init-harness`.
+  Token never returned in responses. Temp dir cleaned in `finally` block.
+- `packages/server/src/app.ts`: registered `registerProjectRoutes`
+- `packages/agents/generate/package.json`: added `simple-git`
+- `packages/agents/generate/src/orchestrator/orchestrator.ts`: rewrote
+  `handleIntentTask` — looks up project, reads credential, clones fresh
+  per cycle into temp dir, sets `projectRoot` to clone path, cleans up
+  in `finally`
+- `packages/cli/src/api/client.ts`: added `createProject`, `listProjects`,
+  `getProject`, `initHarness` typed wrappers
+- `packages/cli/src/commands/init.ts`: replaced mock with real Git-first
+  four-phase wizard
+- `packages/cli/src/commands/projects.ts` (new): `gestalt projects list`
+  and `gestalt projects use <name>`
+- `packages/cli/src/index.ts`: registered `gestalt projects` commands.
+  Added `.allowExcessArguments(false)` on `init` — old broken
+  `gestalt init local-admin` now fails fast
+- `docs/DECISIONS.md`: appended ADR-032
+- `docs/guides/quick-start.md`: Steps 7-8 rewritten for Git-first flow
+
+Decisions made:
+- Inlined harness file content in routes/projects.ts (Dockerfile does not
+  copy templates/; revisit when template story matures)
+- `x-access-token` URL-embedded PAT (works across GitHub/GitLab/Azure DevOps)
+- Per-cycle clone (stateless, clean failure recovery)
+- `getCredential` returns most recent row by `created_at DESC LIMIT 1`
 
 Build status:
-- `@gestalt/core`: should compile (type errors fixed)
-- `@gestalt/agents-generate`: type fixes applied, verify with `pnpm --filter @gestalt/agents-generate build`
-- All other packages: not yet verified in Docker
-- `docker-compose up -d`: failing at agents-generate build step
+- `pnpm -r build` — all 12 buildable packages compile clean
+- `docker-compose up -d --build` — server, postgres, redis all `Up (healthy)`
+- All three migrations apply on first start
+- Orchestrator worker running, clones project repo per intent cycle
+- ADR-032 end-to-end verified (failure mode against fake PAT confirms real flow)
 
-Next task for Claude Code:
-1. Run `pnpm --filter @gestalt/agents-generate build` and fix remaining errors
-2. Build each package in dependency order, fix errors
-3. Get `docker-compose up -d` fully passing
-4. Run `gestalt init local-admin` and verify the platform starts
+Operator caveats:
+- Smoke test left data in DB. Run `docker-compose down -v` before real use
+- `LLM_MODEL` in local `.env` is still bogus — set a valid model before
+  running `gestalt run` against a real project
 
 ---
 
@@ -269,52 +397,29 @@ Next task for Claude Code:
 - All 8 architecture layers fully designed and documented
 - All 12 buildable workspace packages compile clean (`pnpm -r build`)
 - `docker-compose up -d` succeeds — server, postgres, redis all `Up (healthy)`
-- Database migrations apply on startup — `users`, `local_auth`, `audit_log`,
-  `projects`, `project_git_credentials`, etc. all created; `schema_migrations`
-  tracks `001_initial`, `002_local_auth`, and `003_projects`
+- All three migrations apply on startup: `001_initial`, `002_local_auth`,
+  `003_projects`
 - Server reachable on http://localhost:3000 — `/health` returns 200
 - Auth middleware active — protected routes return 401
-- First-boot bootstrap verified end-to-end with curl: `POST /auth/admin/setup`
-  → 201 + JWT, second call → 403 `ADMIN_ALREADY_EXISTS`, `POST /auth/login`
-  with correct creds → 200 + JWT (role 'admin' preserved), wrong password →
-  401 `PROVIDER_ERROR`, `GET /auth/me` with token → 200
-- `gestalt init-admin` exercised in a real terminal — admin created, JWT
-  stored in `~/.gestalt/config.json`
-- `POST /intents` (which `gestalt run` calls) accepted and BullMQ-queued.
-  Job lands at `bull:gestalt-generate:*` in Redis. The generate-layer
-  orchestrator worker is registered at server startup (step 6 in
-  `server.ts`) and consumes the queue with concurrency 3
-- Project registration + Git delivery (ADR-032) is wired end-to-end:
-  `POST /projects` registers a project (name + Git URL + PAT, token
-  stored in `project_git_credentials` and never echoed in responses);
-  `POST /projects/:id/init-harness` clones the repo into a temp dir,
-  writes harness files, commits, pushes, and cleans up the temp dir in a
-  `finally` block; the orchestrator clones fresh per intent cycle and
-  drives the plan against that working tree. `gestalt init` is now a thin
-  client over those endpoints — no local file writes
+- First-boot bootstrap verified end-to-end: `gestalt init-admin` creates
+  admin + JWT; `gestalt login` authenticates; `GET /auth/me` returns user
+- `gestalt init` fully implemented — Git-backed four-phase wizard:
+  registers project on server, server clones repo, commits harness files,
+  pushes; developer runs `git pull` to receive harness locally
+- `gestalt projects list` and `gestalt projects use <name>` working
+- `gestalt run` queues intent → orchestrator picks up → clones project
+  repo fresh per cycle → runs generate loop against cloned harness files
+- `gestalt init local-admin` (old broken syntax) now fails fast with a
+  clear error (`allowExcessArguments(false)` on init command)
 - `GET /status`, `GET /status/agents`, `GET /intents`, `GET /intents/:id`
-  all return 200 (verified with curl). Previously `/status` and intent
-  detail returned 500 because `executions`, `artifacts`, and `signals`
-  were stub repos in the postgres adapter — now real PG implementations
-- CLI installed via `pnpm --filter @gestalt/cli build && cd packages/cli && npm link`
-- `gestalt init-admin` is **TTY-only** — `prompt`/`promptSecret` use readline
-  + raw-mode stdin, so the command cannot be driven from piped input. Works
-  fine in a real terminal; would need a non-interactive `--email/--password`
-  mode for scripted use (not implemented)
-- Old broken command `gestalt init local-admin` is still accepted because
-  Commander silently ignores extra positionals on a no-arg `init` command.
-  It runs the project-init wizard (which writes `AGENTS.md` / `HARNESS.json`
-  / etc. into `cwd`), never prompts for credentials. Users coming from the
-  old docs hit this — they get no admin and no token, then `gestalt run`
-  responds "Not authenticated". A `program.command('init').allowExcessArguments(false)`
-  or an explicit error-on-extra-arg would surface the typo
+  all return 200
 
 **What is not yet built:**
 - `@gestalt/agents-quality-gate` — stubs only
 - `@gestalt/agents-deploy` — stubs only
 - `@gestalt/agents-maintenance` — stubs only
-- `@gestalt/adapter-oracle` — stub
-- `@gestalt/adapter-mssql` — stub
+- `@gestalt/adapter-oracle` — stub (builds, ProjectRepository throws)
+- `@gestalt/adapter-mssql` — stub (builds, ProjectRepository throws)
 - `@gestalt/registry` — types and client only
 
 **Postgres adapter repository coverage (all real, no remaining stubs):**
@@ -327,42 +432,31 @@ Next task for Claude Code:
 - `users`       — upsert, findById, findByIdpSubject, list, count
 - `localAuth`   — create, findByEmail
 - `projects`    — create, findById, findByName, list, saveCredential,
-  getCredential (token stored in `project_git_credentials`, never
-  returned by routes; encrypt-at-rest is a documented TODO)
+  getCredential (token stored plain — TODO: encrypt at rest)
 
 **CLI install:**
 - `@gestalt/cli` is private — not on npm
 - Install: `pnpm --filter @gestalt/cli build && cd packages/cli && npm link`
 
-**First-boot admin setup:**
-- `gestalt init-admin` posts to `POST /auth/admin/setup` (public, zero-user guarded)
-- Creates a `users` row (role: admin, authProvider: local) plus a `local_auth`
-  row holding the bcrypt password hash, writes an audit record, and returns a JWT
-- On subsequent calls the endpoint returns 403 (`ADMIN_ALREADY_EXISTS`)
-- `POST /auth/login` is now wired up: routes through AuthManager → LocalProvider →
-  bcrypt.compare against local_auth.password_hash
-- AuthManager preserves the existing role for local-provider logins (so the
-  first admin stays admin and is not downgraded to operator on next login)
-- **Operator setup requirement:** the local `.env` must set
-  `NODE_ENV=development`. docker-compose now reads `NODE_ENV=${NODE_ENV:-production}`
-  so production deployments are unchanged; local-only auth (ADR-025) refuses
-  to register the LocalProvider when NODE_ENV=production unless an operator
-  explicitly sets `allowedInProduction: true`
+**First-boot sequence:**
+1. `docker-compose up -d` — start platform
+2. `gestalt init-admin` — create admin user (TTY only, once per server)
+3. `gestalt login` — authenticate CLI
+4. `mkdir my-project && cd my-project`
+5. `git init && git remote add origin <url>`
+6. `gestalt init` — register project + server pushes harness to Git
+7. `git pull` — receive harness files locally
+8. `gestalt run "<intent>"` — submit work to agents
 
 **Pending enhancements (design in chat first):**
 - **Encrypt Git PATs at rest.** `project_git_credentials.token` is plain
-  text today; documented `TODO` in `repositories/projects.ts`. Pick a
-  key-management story (pgcrypto `pgp_sym_encrypt` with a server-side
-  master key, or libsodium with a separately-mounted key file) before any
-  shared use of the platform
+  text. Documented TODO in `repositories/projects.ts`. Pick a key-management
+  approach before any shared/production use
 - **LLM model name validation.** `loadConfig` accepts any non-empty string
-  for `LLM_MODEL`; e.g. `gpt-5.3-codex` (operator's local value) is not a
-  real OpenAI model and would 404 once the platform starts driving real
-  LLM calls. Worth adding a startup-time ping or at least a clear error
-  path
-- Non-interactive mode for `gestalt init-admin` (CLI flags or stdin JSON) so
-  it can be scripted. Current implementation is TTY-only by design of
-  `promptSecret`
+  for `LLM_MODEL`. Worth adding a startup-time ping or clear error path
+- Non-interactive mode for `gestalt init-admin` (--email/--password flags)
+  for scripted use — current implementation is TTY-only
+- Quality-gate, deploy, and maintenance agent full implementations
 
 **Known architectural constraints Claude Code must respect:**
 - pnpm 9.x only (Node 20 compatibility)
@@ -372,635 +466,8 @@ Next task for Claude Code:
 - All state-changing operations write an audit record (GP-002)
 - Server must not import from packages/dashboard/src — use server-local type mirrors
 - /events SSE route is canonical in routes/events.ts — do not re-register elsewhere
-
----
-
-### Session 2026-05-28 — Claude Code (CLI install fix)
-Changed:
-- `packages/cli/package.json`: flipped `"private": false` → `"private": true`
-  so `npm publish` will not be suggested and the package's intent (local
-  workspace only) matches reality
-- `README.md`: replaced the `npm install -g @gestalt/cli` quick-start snippet
-  with the `pnpm install` + `pnpm --filter @gestalt/cli build` + `npm link`
-  workflow that actually works in this monorepo
-- `docs/guides/quick-start.md`: same replacement, plus a forward-link to the
-  new runbook entry so users who hit the 404 land on the explanation
-- `docs/guides/deployment.md`: replaced the on-server install with a clone +
-  build + `npm link` flow (and clarified the CLI runs on the operator
-  workstation, not on the server host)
-- `docs/runbooks/common-issues.md`: added a **CLI issues** section covering
-  the `npm install -g @gestalt/cli` 404 and a follow-up `gestalt: command not
-  found` (PATH + build prerequisite) — both are predictable from the new
-  install flow
-
-Decisions made:
-- Used `npm link` rather than `pnpm link --global` because the existing docs
-  reference `npm` and the CLI's package.json `bin` field is the npm
-  convention. Both work, but mixing tools in user-facing instructions is the
-  failure mode this session is fixing — better to stay consistent on `npm`
-  for the install step even though dependency install uses pnpm
-- Did not edit `packages/cli/README.md` or `docs/ARCHITECTURE.md` despite
-  matching the `@gestalt/cli` grep. Those mention the package by name
-  (orientation / architecture overview) but do not contain install commands
-
-Build status:
-- No source changes — TypeScript build is unaffected
-- `docker-compose up -d` state from the prior session is unchanged
-
-### Session 2026-05-28 — Claude Code (first-boot admin setup)
-Changed:
-- `packages/adapters/postgres/src/migrations/002_local_auth.sql`: new migration
-  adding the `local_auth` table (user_id FK → users with ON DELETE CASCADE,
-  unique email, bcrypt password_hash). Runner tracks application — no manual
-  INSERT into schema_migrations inside the file
-- `packages/core/src/repository/index.ts`: added `LocalAuthRepository`
-  interface + `LocalAuthRecord` type; added `count()` to `UserRepository`
-  (zero-user guard for /auth/admin/setup); added `localAuth` to
-  `RepositoryRegistry`
-- `packages/core/src/index.ts`: re-exported `LocalAuthRepository` and
-  `LocalAuthRecord`
-- `packages/adapters/postgres/src/repositories/users.ts`: implemented
-  `count()`
-- `packages/adapters/postgres/src/repositories/local-auth.ts`: new
-  `PostgresLocalAuthRepository` (create + findByEmail)
-- `packages/adapters/postgres/src/index.ts`: wired `PostgresLocalAuthRepository`
-  into the registry returned by `createPostgresAdapter`
-- `packages/server/package.json`: added `bcrypt@^5.1.1` runtime dep and
-  `@types/bcrypt@^5.0.2` dev dep
-- `packages/server/src/routes/admin.ts`: new route module — `POST
-  /auth/admin/setup`. Public endpoint guarded by `users.count() === 0`,
-  bcrypt-hashes (12 rounds) the password, upserts the user with role 'admin'
-  / authProvider 'local' / idpSubject = email, inserts the local_auth row,
-  writes a manual audit record (the audit hook skips because there is no
-  authenticated `request.user` yet), and returns `{ token, user }`
-- `packages/server/src/auth/middleware.ts`: added `POST /auth/admin/setup` to
-  `PUBLIC_ROUTES` so the JWT preHandler does not block it
-- `packages/server/src/auth/providers/local.ts`: replaced the
-  "not yet implemented" stub. Now looks up local_auth by email,
-  bcrypt.compare-s, throws `AuthenticationError` on missing creds or wrong
-  password, returns a `VerifiedIdentity` with provider: 'local' on success
-- `packages/server/src/auth/auth-manager.ts`: imported `getRepositories`;
-  changed `createSession` so local-provider identities preserve the existing
-  user's role (look up by idpSubject + 'local'), falling back to 'operator'.
-  IdP identities still flow through `resolveRole` as before
-- `packages/server/src/auth/routes.ts`: implemented `POST /auth/login` —
-  validates body, wraps the Fastify request as `IncomingRequest`, calls
-  `authManager.authenticate`, returns `{ token, user }` on success and maps
-  `AuthenticationError.code === 'LOCAL_IN_PRODUCTION'` to 403, everything
-  else to 401
-- `packages/server/src/app.ts`: registered the new admin route module after
-  `registerAuthRoutes`
-- `packages/cli/src/api/client.ts`: added `adminSetup({ email, password,
-  displayName })` typed wrapper around POST /auth/admin/setup
-- `packages/cli/src/commands/init-admin.ts`: new CLI command — health check,
-  prompts (email, displayName, password, confirmPassword), client-side
-  validation (>= 8 chars, passwords match), calls `client.adminSetup`,
-  stores the JWT via `updateCliConfig`, prints the local-auth warning
-  banner, special-cases a 403 with a "use gestalt login" message
-- `packages/cli/src/index.ts`: registered `gestalt init-admin
-  [--server <url>]` and updated the file header comment
-- `docs/guides/quick-start.md`: Step 4 now uses `gestalt init-admin` (was
-  `gestalt init local-admin`, which never existed); added a forward-link to
-  the new runbook entry
-- `docs/runbooks/common-issues.md`: added an "Admin setup fails with admin
-  already exists" entry explaining the 403, the deliberate absence of a CLI
-  bypass, and the three resolution paths (sign in / wipe volume in dev / new
-  account via IdP)
-
-Decisions made:
-- **Separate `local_auth` table** rather than adding a nullable
-  `password_hash` column to `users`. Keeps credentials isolated from the
-  shadow user record (which is otherwise IdP-mirrored) and lets us drop
-  `local_auth` cleanly when local mode is retired
-- **`LocalAuthRepository` in core, implemented in adapter-postgres** — same
-  pattern as the other repos so ADR-004 (no DB access outside adapters) still
-  holds. Provider and route call through `getRepositories()`
-- **Preserve role on local login** by changing `AuthManager.createSession`
-  rather than the role-mapper. The role-mapper is pure logic (no DB); the
-  manager already has access. This is a focused fix — IdP role re-evaluation
-  is untouched
-- **Manual audit write inside the admin route**, because the audit hook
-  short-circuits when `request.user` is undefined. The actor on the audit
-  row is the just-created admin's UUID, which is the most informative actor
-  available at that moment
-- **bcrypt over argon2** — bcrypt was specified in the task; matches the
-  comments already in the codebase ("Phase 2: bcrypt verification")
-- **12 rounds** for bcrypt — standard for new systems in 2026, balances
-  CPU cost vs. brute-force resistance
-- Did not migrate the CLI to ESM despite the pinned chalk@4/ora@5
-  caveat flagged in the previous session — staying on CJS keeps this change
-  surgical. That migration remains a separate task
-
-Build status:
-- `pnpm -r build` — all 12 buildable packages compile clean (verified)
-- Migration not yet applied — `002_local_auth.sql` runs the next time the
-  server starts against the postgres container
-- `docker-compose up -d` not exercised in this session; expected to work
-  unchanged since type-check passes and the bcrypt native binding installed
-  successfully via node-pre-gyp
-- End-to-end smoke test (run `gestalt init-admin`, then `gestalt login` with
-  the same creds, then call a protected route with the returned token) is
-  the next verification step
-
----
-
-### Session 2026-05-28 — Design chat review
-
-Evaluation: Claude Code session was clean and well-aligned. No architectural drift detected.
-
-One item flagged for future attention:
-- `packages/cli/package.json` uses chalk@4 and ora@5 (CJS-compatible downgrades).
-  These are intentionally pinned. When CLI enhancement work begins, migrate the
-  CLI package to ESM (add `"type": "module"` to package.json, add `.js` extensions
-  to all relative imports, update Dockerfile) so chalk@5+ and ora@8+ can be used.
-  Do not upgrade chalk/ora without doing the full ESM migration — it will break the build.
-
-- `toTaskPriority()` mapper exists in `packages/server/src/routes/intents.ts`
-  because `IntentRecord.priority` uses `'low'` but core `TaskPriority` uses
-  `'background'`. If priority levels are ever extended, both types need updating
-  together.
-
----
-
-### Session 2026-05-28 — Claude Code (CLAUDE.md status refresh)
-Changed:
-- `CLAUDE.md`: rewrote the **Current build status** section (lines ~135-143)
-  to reflect that `pnpm -r build` compiles cleanly across all 12 packages and
-  to list every workspace package individually instead of describing
-  `agents-generate` as "type fixes applied, verify with…". Added a one-line
-  pointer to the **Current state** section as the authoritative snapshot
-- `CLAUDE.md`: rewrote the **Known issues to resolve** section. The old
-  numbered list (FeedbackSignal / ContextSnapshot / optional-field patterns)
-  described errors that were resolved in the 2026-05-28 build-fix session and
-  no longer apply. Replaced with four areas to keep in mind when modifying
-  this repo: `UserRepository` extensions need parity across all adapters,
-  `agents-generate` ↔ `core` type alignment, the intentional CJS pin on
-  chalk/ora in the CLI, and the `toTaskPriority` mapper coupling
-
-Decisions made:
-- Kept the "Known issues to resolve" heading rather than renaming it (e.g.
-  to "Things to watch") — the section appears in the **Before doing
-  anything** reading list, so future agents will still find it at the same
-  anchor. The content under the heading now matches reality
-- Did not duplicate the package status table into the **Current state**
-  section. The new build-status table is granular ("compiles clean") and the
-  Current state section already lists what is and isn't built feature-wise
-  ("`@gestalt/agents-quality-gate` — stubs only"). They answer different
-  questions, so both stay
-
-Build status:
-- No source changes — TypeScript build is unaffected
-
----
-
-### Session 2026-05-29 — Claude Code (bootstrap smoke test + fixes)
-
-Smoke-tested the first-boot admin path end-to-end inside Docker. The
-HTTP-level flow now works completely: 201 + JWT on first `POST
-/auth/admin/setup`, 403 `ADMIN_ALREADY_EXISTS` on a second call, 200 + JWT
-on `POST /auth/login` with the admin's role preserved as 'admin' (not
-downgraded to operator), 401 `PROVIDER_ERROR` on wrong password, 200 on
-`GET /auth/me`. Three pre-existing platform bugs blocked the smoke test
-and had to be fixed first — none were regressions from the
-`feat: first-boot admin setup` work; they prevented any Docker bootstrap
-from succeeding on a fresh volume.
-
-Changed:
-- `packages/adapters/postgres/package.json`: build script changed from
-  `tsc` to `tsc && mkdir -p dist/migrations && cp src/migrations/*.sql
-  dist/migrations/`. Without this, the compiled runner at
-  `dist/migrations/runner.js` finds zero `.sql` files (tsc does not copy
-  non-TS assets) and silently applies no schema — so the `users` table
-  never gets created at runtime, even though `pnpm -r build` succeeds. This
-  also makes the explicit `COPY ... src/migrations` line in
-  `packages/server/Dockerfile` (lines 81-82) redundant, but it was left in
-  place rather than touched in this session
-- `packages/adapters/postgres/src/migrations/001_initial.sql`: two fixes —
-  (a) the `REVOKE UPDATE, DELETE ON audit_log FROM gestalt_app;` statement
-  referenced a role that never exists (POSTGRES_USER defaults to `gestalt`),
-  so the migration transaction rolled back on every fresh start; wrapped in
-  a `DO $$ EXECUTE format('REVOKE … FROM %I', current_user) … EXCEPTION
-  WHEN OTHERS THEN NULL; END $$;` block so the audit-log protection is
-  applied to whichever role connects and is tolerant of the role being
-  absent. (b) Removed the file's own `CREATE TABLE schema_migrations` and
-  `INSERT INTO schema_migrations (version) VALUES ('001_initial');` — the
-  migration runner in `migrations/runner.ts` already does both inside the
-  same transaction, so the duplicates failed with a primary-key conflict
-  and an "already exists" error
-- `docker-compose.yml`: `NODE_ENV=production` → `NODE_ENV=${NODE_ENV:-production}`.
-  Production deployments are unchanged (still defaults to `production`); local
-  smoke-testing can now set `NODE_ENV=development` in `.env` to let the
-  AuthManager register the LocalProvider. ADR-025 (local auth non-production
-  only) is still enforced by the existing `allowedInProduction` check
-- `.env` (gitignored, local-only): added `NODE_ENV=development` with a
-  comment pointing to ADR-025. This file is not committed; documented here
-  so operators know what to set
-
-Decisions made:
-- **Fix migration packaging in the build script, not the Dockerfile.** The
-  build-script approach makes the SQL files land in `dist/migrations/` for
-  both dev (`pnpm dev`, `tsx`) and prod (Docker multi-stage). A Dockerfile-
-  only fix would have left non-Docker runners broken
-- **Use `current_user` in the REVOKE rather than hardcoding `gestalt` or
-  reading POSTGRES_USER.** Hardcoding couples 001 to one deployment;
-  reading env requires a templating step. `current_user` resolves at SQL
-  execution time and works for any operator-chosen role
-- **Strip the manual schema_migrations writes from 001** rather than
-  changing the runner to use `ON CONFLICT DO NOTHING`. The runner already
-  owns the version-tracking contract; migrations should be pure schema
-  changes. This convention is documented in a comment block where the
-  removed statements used to live, so 003+ authors do not re-introduce the
-  same bug
-- **Make NODE_ENV overridable in compose, not edit ADR-025.** The ADR's
-  intent ("local auth non-production only") is correct. The fix is just
-  giving the operator a way to set NODE_ENV per environment without
-  patching the compose file
-- Did not touch `packages/cli/src/ui/prompts.ts` to enable scripted CLI
-  use. The raw-mode `promptSecret` is intentionally interactive; a flag-
-  based non-interactive mode is now listed under **Pending enhancements**
-  in **Current state** instead of being smuggled in here
-
-Build status:
-- `pnpm -r build` — all 12 buildable packages compile clean
-- `docker-compose up -d` (after `docker-compose down -v` on prior failed
-  volumes) — server, postgres, redis all `Up (healthy)`
-- Both migrations apply on first start (visible in `docker-compose logs
-  server`: "Applying migration … 001_initial" → "Migration applied" →
-  "Applying migration … 002_local_auth" → "Migration applied")
-- End-to-end admin-setup + login smoke test via curl — all five cases
-  pass (see top of session note)
-- CLI `gestalt init-admin` — exits cleanly on TTY; cannot be piped (raw-
-  mode password prompt is TTY-only). Real-terminal interactive use is the
-  supported path
-
-Operator caveat:
-- The smoke test left one admin in the DB (`tty-admin@example.com`). Anyone
-  running `gestalt init-admin` against this same stack now will hit 403.
-  Run `docker-compose down -v` first to reset (this destroys all data)
-
----
-
-### Session 2026-05-29 — Claude Code (BullMQ queue-name fix)
-
-The user ran `gestalt run` against a working admin session and got
-`API error 500: Queue name cannot contain :`. Pre-existing bug — would
-have crashed the first dispatch on any deployment. Not a regression from
-the bootstrap work; the queue path was never exercised before.
-
-Changed:
-- `packages/core/src/queue/index.ts`: `QUEUE_NAMES` constants flipped from
-  `gestalt:{layer}` → `gestalt-{layer}` (generate / gate / deploy /
-  maintenance). BullMQ 5.x rejects queue names containing `:` because it
-  reserves the colon for its own Redis key prefix (`bull:<queue>:<key>`).
-  Also updated the docstring at the top of the file to describe the new
-  naming and call out the BullMQ constraint
-- `docs/runbooks/common-issues.md`: the diagnostic
-  `redis-cli LLEN bull:generate:wait` was already wrong (it would have
-  returned 0 even before this bug because BullMQ's full key is
-  `bull:<queue>:wait`, not `bull:generate:wait`). Fixed to
-  `bull:gestalt-generate:wait`
-
-Verified:
-- Rebuilt core + server image, restarted server. `POST /intents` with a
-  real JWT now returns 201 instead of 500, and `redis-cli --scan --pattern
-  'bull:*'` shows the expected `bull:gestalt-generate:id`,
-  `bull:gestalt-generate:meta`, `bull:gestalt-generate:prioritized`, etc.
-  keys getting populated
-
-Decisions made:
-- **Hyphen over BullMQ's `prefix` option.** BullMQ offers a `prefix`
-  QueueOptions field that adds a Redis-key prefix without restricting
-  what's in the queue name. That would have preserved the colons in
-  developer-facing constants, but it adds a second indirection (key
-  pattern is then `<prefix>:<queue>:*`) and existing log lines / runbook
-  entries reference the queue name directly. Hyphen is the cheapest
-  change with the smallest mental model
-- **Did not add a sanity check at queue construction time.** The new
-  pattern is locked in `QUEUE_NAMES` and that's the only authority. A
-  future regression would surface immediately on first dispatch, same as
-  this one did
-
-Build status:
-- `pnpm --filter @gestalt/core build` — clean
-- `docker-compose up -d --build server` — server `Up (healthy)`
-- Verified `POST /intents` returns 201 with token, queue keys created in
-  Redis
-
-Known follow-ups (not addressed this session, listed under **Pending
-enhancements** in **Current state**):
-- No worker is registered for `gestalt-generate`. Submitted intents queue
-  but never get drained. Server startup needs to import and start the
-  generate orchestrator from `@gestalt/agents-generate` between
-  "Auth manager ready" and "Fastify app"
-- `gestalt init local-admin` (old broken syntax from the original task
-  brief) silently runs the project-init wizard because Commander accepts
-  unknown positionals. Worth a `.allowExcessArguments(false)` on the
-  `init` command to fail fast
-- `gestalt init`'s project slug logic produced `currentProjectId:
-  "generate-a-full-stack,"` (trailing comma from user description). The
-  init command mocks the LLM anyway, so the whole slug-builder will be
-  rewritten when init is reimplemented
-
----
-
-### Session 2026-05-29 — Claude Code (postgres repo stubs implemented)
-
-The user ran `gestalt status` against a freshly-rebuilt stack and got
-`API error 500: Not yet implemented`. Source: `packages/adapters/postgres/src/index.ts`
-had three inline stub literals — `executions`, `artifacts`, `signals` —
-whose methods all threw on call. `GET /status` and `GET /status/agents`
-both hit `executions.findActive()`. Intent detail (`GET /intents/:id`)
-hit all three. The PR description on `844abba` flagged "all other repos
-remain stubs" but the gap was unaddressed; `gestalt status` was the
-first end-user-facing command that exercised them.
-
-Changed:
-- `packages/adapters/postgres/src/repositories/executions.ts` (new):
-  `PostgresAgentExecutionRepository` — `create`, `updateStatus`
-  (`COALESCE`-merges optional `tokensUsed` / `durationMs` / `startedAt` /
-  `completedAt` so partial updates do not clobber existing values),
-  `findByCorrelationId`, `findActive` (status IN ('queued', 'running'))
-- `packages/adapters/postgres/src/repositories/artifacts.ts` (new):
-  `PostgresArtifactRepository` — `save`, `findByCorrelationId` with
-  optional `ArtifactType` filter, `findById`
-- `packages/adapters/postgres/src/repositories/signals.ts` (new):
-  `PostgresSignalRepository` — `save`, `findByCorrelationId`,
-  `findUnresolved`, `markResolved`. `location` is stored as JSONB and
-  hydrated back into `CodeLocation`. `markResolved` enforces the platform
-  invariant that `GOLDEN_PRINCIPLE_BREACH` signals can only be resolved by
-  a human — refuses any non-human `resolvedBy`
-- `packages/adapters/postgres/src/index.ts`: removed the inline stub
-  literals and the `stub = () => { throw … }` factory; wired the three new
-  repos into the registry returned by `createPostgresAdapter`. Deleted the
-  outdated "implemented in full Phase 2 build" comment
-
-Verified:
-- `pnpm --filter @gestalt/adapter-postgres build` + `pnpm --filter
-  @gestalt/server build` — clean
-- `docker-compose up -d --build server` — server `Up (healthy)`
-- `GET /status` → 200 `{"data":{"activeAgents":0,…}}`
-- `GET /status/agents` → 200 `{"data":[]}`
-- `GET /intents?projectId=smoke` → 200 `{"data":[],"total":0,…}`
-- `POST /intents` then `GET /intents/:id` → 200 with `agentExecutions:
-  []`, `signals: []`, `artifacts: []` (all three new repos called inside
-  `Promise.all([...]) in `packages/server/src/routes/intents.ts:137`)
-
-Decisions made:
-- **Implemented the full interface for each repo, not just the methods
-  `gestalt status` happens to need.** `findActive` alone would have fixed
-  the immediate 500, but the next CLI path (`gestalt status --id <id>` →
-  intent detail) would have failed on `findByCorrelationId` for all three.
-  Implementing the whole repo is the same amount of effort and removes the
-  next class of bug
-- **`COALESCE` on `updateStatus`** for `agent_executions` — workers will
-  call it multiple times per task lifecycle (start → running →
-  finished), and the contract says `fields` is `Partial<AgentExecutionRecord>`.
-  Without COALESCE, omitted fields would null out previously-set values
-- **Enforced GOLDEN_PRINCIPLE_BREACH human-only resolution at the
-  repository layer**, not just convention. This is one of the invariants
-  listed under "Architecture decisions to respect" in CLAUDE.md and one
-  of the platform's golden principles per AGENTS.md. Putting it here
-  means any future caller (route, agent, script) is bound by it without
-  having to re-implement the check
-- **`location` stored as JSON-stringified JSONB and parsed on read.**
-  postgres.js auto-parses JSONB columns, so the round-trip is `null` or
-  `CodeLocation` — `rowToSignal` handles both. Did not lift a generic
-  helper because this is the only column that needs it
-- **Did not touch the audit / users / localAuth / intents repos.** They
-  were already real. The session log on `844abba` already covers them
-
-Build status:
-- `pnpm -r build` — all 12 buildable packages compile clean
-- `docker-compose up -d --build server` — server healthy
-- Repo coverage table added to **Current state** so future agents do not
-  re-stub these
-
-Operator note:
-- Existing DB state survives. The user's admin (`amr.farahat@gmail.com`)
-  and JWT are untouched — the volume rebuild was server-only via
-  `docker-compose up -d --build server`. No `docker-compose down -v`
-  required to pick up the fix
-
----
-
-### Session 2026-05-29 — Claude Code (orchestrator worker wired)
-
-The user ran `gestalt run "Set up the initial project scaffold"` and
-watched it sit in `generating` indefinitely. Pre-existing wiring gap, not
-a regression: the generate-layer orchestrator was implemented in
-`@gestalt/agents-generate` but never registered as a BullMQ worker at
-server startup. The intent dispatched cleanly to the `gestalt-generate`
-queue and then nothing pulled it off.
-
-Changed:
-- `packages/server/package.json`: added `"@gestalt/agents-generate":
-  "workspace:*"` to `dependencies` so the server image can import the
-  orchestrator. The Dockerfile already copies `packages/agents/generate/dist`
-  into the runtime image (lines 66-67), so no Dockerfile change was
-  needed
-- `packages/server/src/server.ts`: imported `startOrchestratorWorker` from
-  `@gestalt/agents-generate`, inserted a "step 6" between "Auth manager
-  ready" and "Fastify app" that calls `startOrchestratorWorker(config.queue)`.
-  Logs `"Orchestrator worker started"` so a `docker-compose logs server`
-  immediately tells the operator whether the worker is up. Updated the
-  numbered startup-sequence comment at the top of the file accordingly
-
-Verified:
-- `pnpm --filter @gestalt/server build` — clean
-- `docker-compose up -d --build server` — `Up (healthy)`
-- Logs show: `"Orchestrator worker started"` followed by the worker
-  picking up the user's queued intent (`module: "worker"`, `module:
-  "orchestrator"`)
-- The intent now transitions to `failed` instead of stuck-`generating`,
-  surfacing the next layer of the problem (see below)
-
-Decisions made:
-- **Wire the worker even though it will fail on the next step.** The
-  alternative — leave the worker stub and document the gap as "not yet
-  wired" — keeps the intent invisible (stuck at `generating`). Wiring
-  makes the failure path observable: status flips to `failed`, an
-  `agent_executions` row gets written, and the error appears in
-  `docker-compose logs server`. That is strictly more debuggable for the
-  operator than silence
-- **Did not solve the project-file-delivery problem.** The orchestrator's
-  `assembleContext` reads `HARNESS.json` and friends from disk at
-  `projectRoot`, which defaults to `process.cwd()` (= `/app` in Docker).
-  The container has none of those files because nobody has uploaded a
-  project to it. Fixing this needs a design decision (upload endpoint vs.
-  volume mount vs. DB-stored project context) and is now the next-step
-  blocker. Listed under **Pending enhancements** in **Current state**
-  with the three options spelled out
-- **Did not attempt to validate the operator's `LLM_MODEL` value.** Their
-  local `.env` has `LLM_MODEL=gpt-5.3-codex` (not a real OpenAI model);
-  even with project files solved, the LLM call would 404. Flagged
-  separately under **Pending enhancements**
-
-Build status:
-- `pnpm -r build` — all 12 buildable packages compile clean
-- `docker-compose up -d --build server` — server healthy, orchestrator
-  worker running
-
-Next-step blocker (for operator awareness, not this session):
-- Symptom: every `gestalt run` produces an intent that transitions to
-  `failed` within seconds, with `ENOENT: no such file or directory, open
-  '/app/HARNESS.json'` in `docker-compose logs server`. Cause: the server
-  cannot see the project's harness files. Resolution path is a design
-  decision; do not just stub a HARNESS.json into the image
-
----
-
-### Session 2026-05-29 — Claude Code (ADR-032 project registration + Git)
-
-Implemented the ADR-032 design: the server is the only thing that touches
-the project's Git repo. `gestalt init` now registers a project + has the
-server push the harness; subsequent intent cycles clone fresh per run.
-Resolves the `ENOENT /app/HARNESS.json` blocker.
-
-Changed:
-- `packages/adapters/postgres/src/migrations/003_projects.sql` (new):
-  `projects` table (id, name UNIQUE, git_url, default_branch, created_by
-  FK users, created_at) and `project_git_credentials` table (project_id
-  FK ON DELETE CASCADE, token, created_at). Pure schema only — no
-  `CREATE TABLE schema_migrations` / `INSERT` writes (runner owns those,
-  per 2026-05-29 bootstrap-fix convention)
-- `packages/core/src/repository/index.ts`: added `ProjectRecord` type and
-  `ProjectRepository` interface (create / findById / findByName / list /
-  saveCredential / getCredential); added `projects: ProjectRepository` to
-  `RepositoryRegistry`. `packages/core/src/index.ts` re-exports both
-- `packages/adapters/postgres/src/repositories/projects.ts` (new):
-  `PostgresProjectRepository` implementing the full interface. Token
-  stored plain; `TODO: encrypt at rest before production use` comment
-  inline. `getCredential` returns the most recent row (allows future PAT
-  rotation without schema change)
-- `packages/adapters/postgres/src/index.ts`: wired `PostgresProjectRepository`
-  into `createPostgresAdapter`
-- `packages/adapters/oracle/{package.json, src/index.ts,
-  src/repositories/projects.ts}` (new repo + dep): `OracleProjectRepository`
-  class — every method throws `not implemented`. Added `@gestalt/core`
-  dependency + `typescript` / `@types/node` so the adapter now builds (was
-  a 1-line comment stub before). Same shape for `mssql`
-- `packages/server/package.json`: added `"simple-git": "^3.23.0"` runtime
-  dep. `packages/server/Dockerfile` production stage now `apk add --no-cache
-  git openssh-client` — simple-git shells out to the `git` binary and
-  `node:20-alpine` does not ship it (caught at smoke-test time)
-- `packages/server/src/routes/projects.ts` (new): four routes — `POST
-  /projects` (requireRole operator; validates unique name; creates +
-  saveCredential + audit record `action: 'project.created'`; returns
-  `toPublic(project)` which strips nothing today but documents the
-  "never include credentials" contract); `GET /projects` (lists by
-  `request.user.id`); `GET /projects/:id` (detail, 404 on miss); `POST
-  /projects/:id/init-harness` (mkdtemp under `os.tmpdir()`, clone via
-  `simpleGit().clone()` with the token embedded as
-  `https://x-access-token:<TOKEN>@host/...`, switch to defaultBranch,
-  write six harness files inline, `addConfig user.name/user.email`,
-  `add . && commit && push origin defaultBranch`, audit record
-  `action: 'project.harness-initialised'`, `finally { rm(workDir,
-  recursive, force) }`). All errors surface to the operator with
-  `details: err.message` — the cloneUrl (which carries the token) is
-  never logged or returned
-- `packages/server/src/app.ts`: registered `registerProjectRoutes` after
-  intent routes
-- `packages/agents/generate/package.json`: added `simple-git` dep
-- `packages/agents/generate/src/orchestrator/orchestrator.ts`: rewrote
-  `handleIntentTask` per ADR-032. Looks up the project by `payload.projectId`,
-  reads the credential, mkdtemp + clone fresh per cycle, checkouts the
-  default branch, sets `projectRoot` to the clone path, runs `drivePlan`
-  as before, removes the temp dir in `finally`. `payload.projectRoot` is
-  still honored when set (reserved for resume / clarification flows that
-  already have a working tree)
-- `packages/cli/src/api/client.ts`: added `createProject` / `listProjects`
-  / `getProject` / `initHarness` typed wrappers + `ProjectRecord` type
-- `packages/cli/src/commands/init.ts`: replaced the mocked four-phase
-  wizard with the real Git-first flow — Phase 0 (server health), Phase 0.5
-  (project registration: name / gitUrl / defaultBranch / hidden gitToken),
-  Phase 1 (project description), Phase 2 (server clones + writes +
-  commits + pushes), Phase 3 (GET /projects/:id confirms). Prints
-  `Run: git pull` as the operator's next step. Stores `currentProjectId`
-  in `~/.gestalt/config.json`
-- `packages/cli/src/commands/projects.ts` (new): `projectsListCommand`
-  (table with current-project marker) and `projectsUseCommand` (find by
-  name in the user's list, persist the id locally)
-- `packages/cli/src/index.ts`: registered `gestalt projects list` and
-  `gestalt projects use <name>` under a `projects` parent command. Added
-  `.allowExcessArguments(false)` on `init` so `gestalt init local-admin`
-  (the old broken syntax) now exits with a clear error instead of silently
-  running the wizard with the arg ignored
-- `docs/DECISIONS.md`: appended **ADR-032 — Git repository is the project
-  filesystem** with the full decision, rationale, and consequences
-  (migration, simple-git constraint, per-cycle clone, credential
-  confidentiality, CLI shape)
-- `docs/guides/quick-start.md`: rewrote Steps 7-8 for the Git-first flow.
-  Step 7 now describes creating the empty Git repo and a PAT; Step 8 is
-  the new four-prompt `gestalt init` wizard and a `git pull` to receive
-  the harness. Command reference table grew two `gestalt projects` rows
-
-Verified:
-- `pnpm -r build` — all 12 buildable packages compile clean
-- `docker-compose down -v` then `up -d --build` — three migrations apply
-  on first start (`001_initial`, `002_local_auth`, `003_projects`);
-  orchestrator worker registers; server `Up (healthy)`
-- `POST /projects` happy path returns 201 with the public record; missing
-  fields → 400; duplicate name → 409 with code `PROJECT_NAME_TAKEN`;
-  `GET /projects` lists the row; `grep` against responses confirms the
-  token never appears in `/projects` or `/projects/:id` payloads
-- `POST /projects/:id/init-harness` against a fake URL returns 500 with
-  `details` set to a real Git error ("Authentication failed for
-  'https://github.com/test/example.git/'") — proves simple-git is
-  invoking the real binary, the token-embedded URL is well-formed, and
-  the `finally` cleanup removed the temp dir
-- `git --version` inside the server container reports `git version 2.52.0`
-  — the Dockerfile `apk add` succeeded
-- `docker-compose exec server ls /tmp | grep gestalt-init` is empty after
-  the failed init-harness call (no orphan temp dirs)
-
-Decisions made:
-- **Inlined harness file content** in `routes/projects.ts` (`buildAgentsMd`,
-  `buildHarnessJson`, etc.) rather than reading from `templates/`. The
-  Dockerfile does not copy `templates/` into the image and shipping a
-  template package the server depends on is over-engineering for the
-  six-file Tier 1 case today. When a richer template story exists
-  (multi-tier, branch-per-template), move these into a templates package
-- **`x-access-token` URL-embedded PAT** in both the server route and the
-  orchestrator (one helper each — same shape). GitHub / GitLab / Azure
-  DevOps all accept this. SSH URLs pass through unchanged; if anyone
-  registers an SSH URL, simple-git will use the container's SSH key,
-  which is out of scope today
-- **Per-cycle clone** rather than persistent working trees. Stateless,
-  cleaner failure recovery, no risk of one cycle's mutations bleeding
-  into another. Cost is bandwidth — acceptable today; if it becomes
-  expensive, switch to shallow clones (`--depth 1`) at the simple-git
-  call site
-- **`getCredential` returns the most recent row by `created_at DESC LIMIT
-  1`.** Allows token rotation by inserting a new row without a schema
-  change. Old rows stay for audit purposes
-- **Orphan-stub adapters now build.** Added `@gestalt/core` dep and
-  TypeScript devDeps to `oracle` and `mssql` so the new
-  `repositories/projects.ts` files type-check. They were 1-line comment
-  files before and never participated in `pnpm -r build` — they do now,
-  which means the "adding a method to ProjectRepository forces parity"
-  invariant from **Known issues** actually fires (build break vs. silent
-  divergence)
-- **Did not add SSH client key generation or known_hosts seeding.**
-  Operators choosing HTTPS+PAT (the documented path) are unaffected. SSH
-  is a future operational story
-- **CLI prints `Commit: <sha>` and a manual `git pull` instruction** as
-  Phase 2 output. We do not run git locally on the operator's machine —
-  the CLI never assumes there is a working tree at `cwd` for the project
-  being registered. Operator is in control of the pull
-
-Operator caveats:
-- The smoke test left one admin (`adr032@example.com`, password
-  `adr-032-test`) and one project (`smoke-proj` with a fake Git URL) in
-  the DB. `docker-compose down -v` before real use
-- `LLM_MODEL=gpt-5.3-codex` in the local `.env` is still bogus — once
-  intents start exercising the LLM (real project, real PAT, valid repo),
-  the first LLM call will 404. Flag carried forward under **Pending
-  enhancements**
-
-Build status:
-- `pnpm -r build` — all 12 buildable packages compile clean
-- `docker-compose up -d --build` — server, postgres, redis all `Up
-  (healthy)`; orchestrator worker running; three migrations applied
-- ADR-032 end-to-end happy-path verified through `gestalt init` ↔
-  `/projects/:id/init-harness` ↔ `simple-git push` (failure mode against
-  fake PAT confirms the real flow)
+- Git token must never appear in API responses or logs
+- `simple-git` for all Git operations — never child_process.exec('git ...')
+- Temp dirs must be cleaned in a finally block — always, even on error
+- Migration files must NOT contain CREATE TABLE schema_migrations or INSERT
+  INTO schema_migrations — the runner handles that
