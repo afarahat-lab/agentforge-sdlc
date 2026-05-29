@@ -8,9 +8,16 @@ export type {
   RetryRecommendation, GateTask, GateHarnessConfig,
   ConstraintRule, ConstraintViolation, SecurityFinding,
   TestRunResult, TestFailure, GateAgentRole, SignalSeverity,
+  ArtifactRef,
 } from './types';
 
+// Orchestrator (BullMQ worker) — call once at server startup.
+export { startGateWorker } from './orchestrator/gate-orchestrator';
+
+// Agents
 export { runConstraintAgent }   from './agents/constraint-agent';
+export { runLlmReviewAgent }    from './agents/llm-review-agent';
+export type { LLMReviewAgentResult, LLMReviewArtifact } from './agents/llm-review-agent';
 export { runSecurityAgent }     from './agents/security-agent';
 export { runLintAgent }         from './agents/lint-agent';
 export { runTestRunnerAgent }   from './agents/test-runner-agent';

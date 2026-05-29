@@ -389,7 +389,7 @@ Operator caveats:
 
 ## Current state (keep this section current)
 
-**Last updated:** 2026-05-29 (Claude Code — first full cycle pushed to Git)
+**Last updated:** 2026-05-29 (Claude Code — quality gate v1 live)
 
 **Repo:** https://github.com/afarahat-lab/gestalt
 
@@ -409,6 +409,27 @@ Operator caveats:
 - `gestalt projects list` and `gestalt projects use <name>` working
 - `gestalt run` queues intent → orchestrator picks up → clones project
   repo fresh per cycle → runs generate loop against cloned harness files
+- **Quality gate v1 wired end-to-end.** After the generate orchestrator
+  pushes artifacts, the gate worker (registered as `startGateWorker(config.queue)`
+  in `server.ts` step 7) clones the project repo fresh and runs:
+  - `constraint-agent` — deterministic regex checks (no-any, no-console,
+    no-direct-db-outside-shared-db, no-hardcoded-secret, no-direct-llm-sdk).
+    Hardcoded-secret and direct-LLM-SDK emit GOLDEN_PRINCIPLE_BREACH.
+  - `llm-review-agent` — single LLM call summarising the artifact set;
+    critical / golden-principle items become GOLDEN_PRINCIPLE_BREACH
+    signals, high/medium become CONSTRAINT_VIOLATION, low/info land in
+    the prose review artifact only. Full review saved as
+    `.gestalt/llm-review-<corr8>.md` in the `artifacts` table
+  - `synthesiseGateResult` produces a verdict: any GOLDEN_PRINCIPLE_BREACH
+    → `escalate`; any CONSTRAINT_VIOLATION / TEST_FAILURE / LINT_FAILURE
+    → `fail`; otherwise `pass`
+  - Intent transitions: `in-review` → `approved` / `failed` / `escalated`
+  - Gate emits `agent.started` / `agent.completed` / `signal.emitted`
+    per agent + a top-level `gate.completed` event with verdict + summary
+  - First live cycle (`b1f6eecd…`): constraint-agent caught a direct-DB
+    import outside `shared/db/`; review-agent caught a missing GP-003
+    input validation (escalating) + a potential data-exposure concern in
+    the audit-log. Intent landed at `escalated` as designed
 - **First full intent → code → push cycle verified end-to-end.** A real
   intent ("Add a hello world endpoint at GET /hello") ran six agents
   (intent / design completed, context + lint-config skipped, code +
@@ -441,7 +462,11 @@ Operator caveats:
   all return 200
 
 **What is not yet built:**
-- `@gestalt/agents-quality-gate` — stubs only
+- `@gestalt/agents-quality-gate` — constraint-agent + llm-review-agent +
+  gate orchestrator implemented (above). lint-agent / security-agent /
+  test-runner-agent still stubs (need pnpm-install-in-clone pipeline);
+  no feedback-loop-back-to-generate yet (failed verdicts mark the intent
+  `failed` instead of dispatching a regenerate)
 - `@gestalt/agents-deploy` — stubs only
 - `@gestalt/agents-maintenance` — stubs only
 - `@gestalt/adapter-oracle` — stub (builds, ProjectRepository throws)
@@ -489,9 +514,18 @@ Operator caveats:
   for `LLM_MODEL`. Worth adding a startup-time ping or clear error path
 - Non-interactive mode for `gestalt init-admin` (--email/--password flags)
   for scripted use — current implementation is TTY-only
-- Quality-gate, deploy, and maintenance agent full implementations +
-  workers wired into server startup (same pattern as
-  `startOrchestratorWorker`)
+- **Feedback loop from gate back to generate.** Today a `fail` verdict
+  marks the intent `failed` and stops. The design (per `feedback-router.ts`
+  in `agents-generate`) routes auto-resolvable signals back to the
+  responsible specialist agents. Implement when iteration speed matters
+  more than human-in-the-loop oversight
+- **Real-tooling gate agents** (typecheck via `tsc`, lint via ESLint,
+  tests via `vitest`). Each needs the project's deps installed in the
+  cloned tree — likely a `pnpm install --frozen-lockfile` step before
+  the agents run, with the install output cached
+- Deploy and maintenance agent full implementations + workers wired
+  into server startup (same pattern as `startOrchestratorWorker` and
+  `startGateWorker`)
 
 **Known architectural constraints Claude Code must respect:**
 - pnpm 9.x only (Node 20 compatibility)
@@ -637,3 +671,90 @@ Build status: All 12 packages compile clean. First end-to-end run-through
 the full SDLC slice (intent → design → code → test → commit → push) is
 functioning. The intent-agent prompt / validator entry under Pending
 enhancements is resolved.
+
+---
+
+### Session 2026-05-29 — Claude Code (quality gate v1)
+
+Implemented the first slice of the quality-gate layer per the "both
+deterministic + LLM review" scope.
+
+Changed:
+- `packages/agents/quality-gate/src/agents/constraint-agent.ts`:
+  replaced the Phase-2 stubs with deterministic regex checks against
+  generated text. Five rules: `no-any`, `no-console` (CONSTRAINT_VIOLATION,
+  auto-resolvable, medium); `no-direct-db-outside-shared-db`
+  (CONSTRAINT_VIOLATION, high); `no-hardcoded-secret` (GOLDEN_PRINCIPLE_BREACH,
+  critical, never auto-resolved); `no-direct-llm-sdk` (GOLDEN_PRINCIPLE_BREACH,
+  high). Locations carry file/line/column/rule
+- `packages/agents/quality-gate/src/agents/llm-review-agent.ts` (new):
+  single LLM call summarising the artifact set. Structured JSON output
+  with items keyed by file/line/severity/category. low/info items live
+  only in the prose review artifact; medium and above produce signals.
+  Severity → signal-type mapping: any `golden-principle` category OR
+  `critical` severity → GOLDEN_PRINCIPLE_BREACH; otherwise
+  CONSTRAINT_VIOLATION. The full prose review is persisted as a `design`
+  artifact at `.gestalt/llm-review-<corr8>.md`
+- `packages/agents/quality-gate/src/orchestrator/gate-orchestrator.ts`
+  (new): BullMQ worker for `bull:gestalt-gate:*`. Mirrors the generate
+  orchestrator's observability pattern — clone project repo into temp
+  dir; per gate-agent run an `agent_executions` row + SSE events
+  (`agent.started` / `agent.completed` / `signal.emitted`); persist
+  signals via the gate-to-platform signal mapping; `synthesiseGateResult`
+  → verdict; emit `gate.completed` with verdict + per-agent summary;
+  transition the intent (`pass` → `approved`, `fail` → `failed`,
+  `escalate` → `escalated`). Temp dir cleaned up in `finally`
+- `packages/agents/quality-gate/src/index.ts`: exports
+  `startGateWorker`, `runLlmReviewAgent`, plus types
+- `packages/agents/quality-gate/package.json`: added `simple-git` runtime
+  dep
+- `packages/server/package.json`: added `@gestalt/agents-quality-gate`
+  workspace dep
+- `packages/server/src/server.ts`: imports `startGateWorker` and calls
+  it as a new "step 7" between the generate-orchestrator registration
+  and Fastify app creation. Startup-sequence comment renumbered
+
+Verified live against project trackeros (correlationId `b1f6eecd…`):
+- Intent: "Add an audit log dashboard module under src/modules/audit
+  with GET /audit/logs … RBAC must require admin role"
+- Generate cycle: 6 agents completed, 12 artifacts produced and pushed
+  to Git (~37s)
+- Gate cycle started immediately on `gate.review` dispatch
+- constraint-agent: 7ms; caught 1 `no-direct-db-outside-shared-db`
+  violation in the generated repository file (the code-agent reached
+  for postgres directly instead of using the shared db layer)
+- llm-review-agent: 3.8s; produced 1 GOLDEN_PRINCIPLE_BREACH (missing
+  GP-003 input validation on the POST endpoint) + 1 CONSTRAINT_VIOLATION
+  (potential PII exposure in audit-log details). Full prose review saved
+  as `.gestalt/llm-review-b1f6eecd.md`
+- Verdict: `escalate` (any GP_BREACH escalates). Intent transitioned to
+  `escalated`
+- SSE captured every event: agent.started + agent.completed for each
+  gate agent + the top-level gate.completed with summary "Gate escalated
+  — 1 golden principle breach(es) require human review"
+
+Decisions made:
+- **Regex over AST for constraint-agent today.** The package comment
+  describes a two-level approach (ESLint + tsc API) but text-based
+  catches the obvious offenders without requiring deps installed in the
+  cloned tree. Promote to AST when a project-deps-install pipeline lands
+- **Review-agent persists the prose review as an artifact** rather than
+  pushing it back to Git or sending the whole prose as signals. The
+  operator reads it via `gestalt status --id <correlationId>`; blocking
+  concerns flow as signals
+- **Failed verdicts don't feed back to generate yet** — they mark the
+  intent `failed`. Routing auto-resolvable signals back to the right
+  generate-agent is a follow-up (existing `feedback-router.ts` already
+  defines the mapping)
+- **Gate clones a fresh copy of the project repo** rather than running
+  against the in-memory artifact set the generate orchestrator hands
+  over. Matches the design intent that downstream layers see the actual
+  Git state (which is what would ship). Also future-proofs for the
+  real-tooling gate agents that will need `node_modules`
+- **Default gate harness config is inlined.** Per-project gate config
+  in HARNESS.json is a small follow-up — the structure is already in
+  the `GateHarnessConfig` type
+
+Build status: All 12 packages compile clean. Both orchestrators
+registered at startup. First end-to-end intent → gate → escalate cycle
+working as designed.

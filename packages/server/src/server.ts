@@ -8,13 +8,15 @@
  *   4. Initialise LLM client
  *   5. Create auth manager
  *   6. Start generate-layer orchestrator worker
- *   7. Create and start Fastify app
- *   8. Register graceful shutdown
+ *   7. Start quality-gate worker
+ *   8. Create and start Fastify app
+ *   9. Register graceful shutdown
  */
 
 import { loadConfig, createLLMClient, setRepositories, createContextLogger } from '@gestalt/core';
 import { createPostgresAdapter, closeDb } from '@gestalt/adapter-postgres';
 import { startOrchestratorWorker } from '@gestalt/agents-generate';
+import { startGateWorker } from '@gestalt/agents-quality-gate';
 import { createApp } from './app';
 import { createAuthManager } from './auth/auth-manager';
 import { loadIdentityConfig } from './auth/config-loader';
@@ -57,7 +59,11 @@ export async function startServer(): Promise<void> {
   startOrchestratorWorker(config.queue);
   log.info('Orchestrator worker started');
 
-  // 7. Fastify app
+  // 7. Quality-gate worker (drains bull:gestalt-gate:*)
+  startGateWorker(config.queue);
+  log.info('Quality-gate worker started');
+
+  // 8. Fastify app
   const app = await createApp(config, authManager);
 
   await app.listen({

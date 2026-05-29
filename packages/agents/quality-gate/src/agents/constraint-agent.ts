@@ -1,57 +1,131 @@
 /**
- * Constraint agent — validates generated code against architectural rules.
+ * Constraint agent — deterministic static checks on generated code.
  *
- * Two-level checking:
- *   Level 1 — ESLint rules (fast, static): import boundaries, no-any, no-console
- *   Level 2 — AST rules (TypeScript compiler API): semantic architectural patterns
- *             that cannot be expressed as ESLint rules alone
+ * Never uses an LLM — must be fully deterministic. Runs as a fast
+ * pre-flight inside the quality-gate orchestrator. Emits:
+ *   - CONSTRAINT_VIOLATION signals for architectural rule breaks
+ *     (no-any, no-console, no-direct-db-outside-shared-db)
+ *   - GOLDEN_PRINCIPLE_BREACH signals for non-negotiables that the
+ *     review-agent / human must approve before deploy (hardcoded
+ *     secrets, direct LLM SDK imports)
  *
- * Never uses an LLM — must be fully deterministic.
- * Produces CONSTRAINT_VIOLATION signals with exact file and line locations.
+ * Text-based regex checks today. A future iteration moves to the
+ * TypeScript compiler API for semantic AST rules.
  */
 
-import type { GateTask, GateAgentResult, GateSignal, ConstraintViolation } from '../types';
+import type {
+  GateTask, GateAgentResult, GateSignal,
+  CodeLocation, SignalSeverity,
+} from '../types';
+import type { SignalType } from '@gestalt/core';
 
-const BUILT_IN_AST_RULES = [
-  'no-direct-db-outside-adapter',
-  'no-direct-llm-outside-core',
-  'audit-record-on-state-change',
-  'no-cross-domain-service-calls',
-] as const;
+interface RegexRule {
+  id: string;
+  description: string;
+  pattern: RegExp;
+  appliesTo: (path: string) => boolean;
+  signalType: SignalType;
+  severity: SignalSeverity;
+  autoResolvable: boolean;
+}
 
-type AstRuleId = typeof BUILT_IN_AST_RULES[number];
+const CODE_FILE = (path: string): boolean =>
+  /\.(ts|tsx|js|jsx)$/.test(path) && !/\.d\.ts$/.test(path);
+
+const NON_TEST_CODE = (path: string): boolean =>
+  CODE_FILE(path) && !/__tests__|\.test\.|\.spec\./.test(path);
+
+const RULES: RegexRule[] = [
+  // ─── CONSTRAINT_VIOLATION (auto-resolvable) ────────────────────────────────
+  {
+    id: 'no-any',
+    description: 'Use unknown with type guards instead of any',
+    // matches `: any` or `as any` but NOT `:anything` or `<any>` (rare false positive)
+    pattern: /(?<![\w$]):\s*any\b|\bas\s+any\b/g,
+    appliesTo: NON_TEST_CODE,
+    signalType: 'CONSTRAINT_VIOLATION',
+    severity: 'medium',
+    autoResolvable: true,
+  },
+  {
+    id: 'no-console',
+    description: 'Use createContextLogger from @gestalt/core; no console.* in production code',
+    pattern: /\bconsole\.(log|error|warn|info|debug)\s*\(/g,
+    appliesTo: NON_TEST_CODE,
+    signalType: 'CONSTRAINT_VIOLATION',
+    severity: 'medium',
+    autoResolvable: true,
+  },
+  {
+    id: 'no-direct-db-outside-shared-db',
+    description: 'Database driver imports only inside shared/db/ — repository pattern',
+    pattern: /from\s+['"](postgres|pg|mysql|mysql2|mssql|oracledb)['"]/g,
+    appliesTo: (path) =>
+      NON_TEST_CODE(path) && !/(^|\/)shared\/db\//.test(path),
+    signalType: 'CONSTRAINT_VIOLATION',
+    severity: 'high',
+    autoResolvable: true,
+  },
+
+  // ─── GOLDEN_PRINCIPLE_BREACH (never auto-resolved) ─────────────────────────
+  {
+    id: 'no-hardcoded-secret',
+    description: 'Secrets, API keys, passwords must come from config — never literal',
+    pattern:
+      /\b(password|apiKey|api_key|secret|token|privateKey|client_secret)\s*[:=]\s*['"`][A-Za-z0-9_\-+/=]{12,}['"`]/gi,
+    appliesTo: CODE_FILE,
+    signalType: 'GOLDEN_PRINCIPLE_BREACH',
+    severity: 'critical',
+    autoResolvable: false,
+  },
+  {
+    id: 'no-direct-llm-sdk',
+    description: 'LLM provider SDKs only inside @gestalt/core/llm — provider abstraction lives in core',
+    pattern: /from\s+['"](openai|@anthropic-ai\/sdk|@google\/generative-ai|cohere-ai|@mistralai)['"]/g,
+    appliesTo: NON_TEST_CODE,
+    signalType: 'GOLDEN_PRINCIPLE_BREACH',
+    severity: 'high',
+    autoResolvable: false,
+  },
+];
+
+interface Violation {
+  ruleId: string;
+  ruleDescription: string;
+  message: string;
+  signalType: SignalType;
+  severity: SignalSeverity;
+  autoResolvable: boolean;
+  location: CodeLocation;
+}
 
 /**
  * Runs the constraint agent against all code artifacts in the task.
- * Returns a GateAgentResult with CONSTRAINT_VIOLATION signals for each violation.
+ * Returns a GateAgentResult with one signal per violation.
  */
 export async function runConstraintAgent(task: GateTask): Promise<GateAgentResult> {
   const startedAt = Date.now();
   const signals: GateSignal[] = [];
 
-  const codeArtifacts = task.artifacts.filter(
-    (a) => a.type === 'code' || a.type === 'test',
-  );
+  for (const artifact of task.artifacts) {
+    if (typeof artifact.content !== 'string') continue;
 
-  for (const artifact of codeArtifacts) {
-    // Level 1: ESLint-based constraint rules
-    const eslintViolations = await runEslintConstraints(
-      artifact.path,
-      artifact.content,
-      task.harnessConfig.constraintRules.filter((r) => r.level === 'eslint'),
-    );
+    for (const rule of RULES) {
+      if (!rule.appliesTo(artifact.path)) continue;
 
-    // Level 2: AST-based semantic rules
-    const astViolations = await runAstConstraints(
-      artifact.path,
-      artifact.content,
-      task.harnessConfig.constraintRules.filter((r) => r.level === 'ast'),
-    );
-
-    const allViolations = [...eslintViolations, ...astViolations];
-
-    for (const violation of allViolations) {
-      signals.push(buildConstraintSignal(task.correlationId, violation));
+      const violations = findViolations(rule, artifact.path, artifact.content);
+      for (const violation of violations) {
+        signals.push({
+          id: crypto.randomUUID(),
+          correlationId: task.correlationId,
+          type: violation.signalType,
+          severity: violation.severity,
+          agentRole: 'constraint-agent',
+          message: violation.message,
+          location: violation.location,
+          autoResolvable: violation.autoResolvable,
+        });
+      }
     }
   }
 
@@ -64,65 +138,46 @@ export async function runConstraintAgent(task: GateTask): Promise<GateAgentResul
 }
 
 /**
- * Runs ESLint programmatically against file content.
- * Uses the constraint rules defined in the project harness.
- *
- * Implementation note: uses ESLint Node.js API with in-memory virtual files.
- * Full implementation in Phase 2 — stub returns empty for now.
+ * Find every match of `rule.pattern` in `content` and produce a violation
+ * record with line/column. Pattern must use the global flag; this function
+ * walks the matches and computes locations from the match index.
  */
-async function runEslintConstraints(
-  _filePath: string,
-  _content: string,
-  _rules: GateTask['harnessConfig']['constraintRules'],
-): Promise<ConstraintViolation[]> {
-  // Phase 2: implement ESLint programmatic API
-  // const { ESLint } = await import('eslint');
-  // const eslint = new ESLint({ useEslintrc: false, rules: buildRuleConfig(rules) });
-  // const results = await eslint.lintText(content, { filePath });
-  // return mapEslintResults(results, rules);
-  return [];
-}
+function findViolations(rule: RegexRule, path: string, content: string): Violation[] {
+  const out: Violation[] = [];
+  // Clone the regex with the global flag set in case the source omitted it.
+  const re = new RegExp(rule.pattern.source, rule.pattern.flags.includes('g') ? rule.pattern.flags : rule.pattern.flags + 'g');
 
-/**
- * Runs AST-based semantic constraint checks using the TypeScript compiler API.
- * Detects patterns that ESLint rules cannot express.
- *
- * Full implementation in Phase 2 — stub returns empty for now.
- */
-async function runAstConstraints(
-  _filePath: string,
-  _content: string,
-  rules: GateTask['harnessConfig']['constraintRules'],
-): Promise<ConstraintViolation[]> {
-  const violations: ConstraintViolation[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(content)) !== null) {
+    const { line, column } = indexToLineCol(content, match.index);
+    out.push({
+      ruleId: rule.id,
+      ruleDescription: rule.description,
+      message: `[${rule.id}] ${rule.description}`,
+      signalType: rule.signalType,
+      severity: rule.severity,
+      autoResolvable: rule.autoResolvable,
+      location: { file: path, line, column, rule: rule.id },
+    });
 
-  for (const rule of rules) {
-    if (BUILT_IN_AST_RULES.includes(rule.check as AstRuleId)) {
-      // Phase 2: implement TypeScript compiler API checks
-      // const checker = buildTypeChecker(content, filePath);
-      // violations.push(...runAstRule(rule.check as AstRuleId, checker, filePath));
-    }
+    // Cap per-file matches so a runaway pattern doesn't flood signals.
+    if (out.length >= 20) break;
+
+    // Guard against zero-length matches (would loop forever).
+    if (match.index === re.lastIndex) re.lastIndex++;
   }
 
-  return violations;
+  return out;
 }
 
-/**
- * Maps a ConstraintViolation to a GateSignal.
- * All constraint violations are high severity — they represent architectural rules.
- */
-function buildConstraintSignal(
-  correlationId: string,
-  violation: ConstraintViolation,
-): GateSignal {
-  return {
-    id: crypto.randomUUID(),
-    correlationId,
-    type: 'CONSTRAINT_VIOLATION',
-    severity: 'high',
-    agentRole: 'constraint-agent',
-    message: `[${violation.ruleId}] ${violation.message}`,
-    location: violation.location,
-    autoResolvable: true,  // code-agent can fix with the rule and location
-  };
+function indexToLineCol(content: string, index: number): { line: number; column: number } {
+  let line = 1;
+  let lastNewline = -1;
+  for (let i = 0; i < index; i++) {
+    if (content.charCodeAt(i) === 10 /* \n */) {
+      line++;
+      lastNewline = i;
+    }
+  }
+  return { line, column: index - lastNewline };
 }

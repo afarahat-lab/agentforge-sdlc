@@ -216,21 +216,30 @@ docker-compose logs -f server | grep -E "orchestrator|<correlationId>"
 
 ### Intent stuck in `in-review`
 
-**By design (today).** A successful generate cycle transitions the intent
-to `in-review` and dispatches a `gate:review` task to `bull:gestalt-gate`.
-No worker drains that queue yet (the quality-gate agents are stubs), so
-the intent stays in `in-review` indefinitely and `gestalt run` keeps its
-SSE stream open waiting for a terminal status that never arrives.
+**Symptom:** Intent reaches `in-review` and never advances to `approved`
+/ `failed` / `escalated`.
 
-**This is not a failure.** Generated artifacts have already been
-committed and pushed to the project's Git repo — `git pull` locally to
-receive them. Press Ctrl+C to release the `gestalt run` terminal; use
-`gestalt status --id <correlationId>` to inspect the executions / signals
-/ artifacts produced.
+**Check the gate worker is registered:**
+```bash
+docker-compose logs server 2>&1 | grep "Quality-gate worker started"
+# Expected: one line per server start
+```
 
-The hang resolves once the quality-gate, deploy, and maintenance agent
-workers are implemented and registered at server startup (tracked under
-Pending enhancements in `CLAUDE.md`).
+**Check the gate queue is being drained:**
+```bash
+docker-compose exec redis redis-cli LLEN bull:gestalt-gate:wait
+# Healthy idle state: 0. Climbing means the gate worker is failing or
+# hanging (LLM call slow, clone failing, etc.)
+```
+
+**Check gate-orchestrator logs for the specific cycle:**
+```bash
+docker-compose logs -f server 2>&1 | grep -E "gate-orchestrator|<correlationId>"
+```
+
+If the gate finishes but the intent does not transition, look for
+`Quality-gate orchestrator error` — the cycle threw and the catch
+clause marked the intent `failed`.
 
 ---
 
