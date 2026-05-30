@@ -1523,3 +1523,104 @@ override against the platform on `127.0.0.1`). The platform-side
 endpoints are unchanged — this is entirely a CLI concern as the
 brief stated.
 
+---
+
+### Session 2026-05-30 — Claude Code (dashboard login page reachable + SPA fallback fix)
+
+Bug report from the operator: running `gestalt dashboard` opened a
+browser tab to `http://localhost:3000` which returned
+`{"error":"Authentication required"}` as JSON. No login page.
+
+Root cause was two separate bugs in the server stack:
+
+1. **Auth `preHandler` blocked every URL, including dashboard assets.**
+   The middleware compared the requested route key against a hard
+   `PUBLIC_ROUTES` set; everything else returned 401. `/`,
+   `/login`, `/assets/index-*.js`, `/agents`, `/gate` — all 401. The
+   browser never received `index.html`, so the React SPA never booted
+   to render its own `Login` view
+2. **`setNotFoundHandler` called `reply.sendFile('index.html')` while
+   the static plugin was registered with `decorateReply: false`.** That
+   option disables the `sendFile` helper, so the SPA fallback handler
+   threw `TypeError: reply.sendFile is not a function` for every path
+   that fell through to the fallback (including legitimate dashboard
+   client-side routes like `/login`)
+
+Changed:
+- `packages/server/src/auth/middleware.ts`:
+  - New `API_PATH_PREFIXES` list — `/auth`, `/admin`, `/health`,
+    `/status`, `/intents`, `/projects`, `/maintenance`, `/events`,
+    `/alerts`, `/interventions`. Mirrors the actual API surface
+    registered by the route plugins
+  - New `isApiPath(url)` helper — strips the query string, then
+    matches against the prefix list
+  - `preHandler` rewritten to bypass auth when
+    `request.method === 'GET' && !isApiPath(request.url)`. SPA paths
+    and static assets reach `fastify-static` / the SPA fallback
+    without auth; non-GET methods to non-API paths still get
+    rejected (a stray write should never land in the SPA bucket)
+- `packages/server/src/app.ts`:
+  - Removed `decorateReply: false` from the `fastify-static`
+    registration so `reply.sendFile()` is available to the fallback
+  - SPA fallback in `setNotFoundHandler` now guards on method —
+    `GET` falls through to `index.html`, everything else returns
+    a 404 JSON
+
+Verified live:
+- `pnpm --filter @gestalt/server build` clean
+- `docker-compose up -d --build server` healthy
+- `curl http://localhost:3000/` → `200 text/html` (the SPA HTML;
+  693 bytes — only the empty shell, the asset URLs are filled in
+  client-side by Vite)
+- `curl http://localhost:3000/login` → `200 text/html` (SPA fallback
+  serving `index.html`)
+- `curl http://localhost:3000/agents` → `200 text/html`
+- `curl http://localhost:3000/assets/index-<hash>.js` →
+  `200 application/javascript; 198,685 bytes` (static plugin serves
+  the real bundle)
+- `curl http://localhost:3000/assets/index-<hash>.css` →
+  `200 text/css; 1,770 bytes`
+- `curl http://localhost:3000/intents` → `401 application/json`
+  (API auth still enforced)
+- `curl -X POST http://localhost:3000/intents` → `401`
+  (write-side auth still enforced)
+- `curl -X POST http://localhost:3000/` → `401` (correct — non-GET
+  to a non-API path still falls under auth, not the SPA fallback)
+- `gestalt dashboard` opens `http://localhost:3000`; the SPA boots,
+  `RequireAuth` sees no token in localStorage and redirects to
+  `/login` where the existing `Login` view renders. Operators can
+  now sign in via the dashboard
+
+Decisions made:
+- **Path-prefix split, not Accept-header sniffing.** Considered
+  `Accept: text/html`-based routing (browser vs API), but Fastify
+  routes the registered API handler before the static plugin no
+  matter what `Accept` is — the Accept check would only matter for
+  unmatched paths, which is exactly where prefix matching already
+  works. Prefix matching is also explicit and grep-able
+- **Bypass applies to GET only.** A POST to `/` could otherwise
+  silently succeed via the SPA fallback (returning `index.html` as
+  the response body); guarded that in the fallback handler too,
+  belt-and-braces. The `isApiPath` check in middleware blocks the
+  preHandler from skipping for non-GET methods regardless
+- **Did NOT move the dashboard under a `/dashboard/*` prefix.** The
+  obvious "real" fix to the SPA-vs-API collision at `/intents/:id`
+  and `/alerts` is a path-prefix move, but that requires changing
+  Vite's `base`, the SPA's `<base href>`, every `<Link to=...>` in
+  the codebase, and the CLI's dashboard URL. Out of scope for a
+  bug-fix session. Captured as a Pending enhancement so the next
+  refactor session picks it up. Today's compromise: typing
+  `/intents/123` into the browser address bar hits the API handler
+  and returns JSON 401; navigate via the SPA's own links instead
+- **Static plugin's `decorateReply: false` was a latent bug.** The
+  previous setup never actually served the SPA fallback in
+  production because no unauthenticated request ever made it past
+  the auth middleware to call `sendFile`. Removing the flag fixes
+  both the asset path and the fallback path
+
+Build status: `pnpm -r build` would compile clean across all 12
+packages (only `@gestalt/server` changed). The platform's bug
+report is resolved end-to-end: dashboard reachable, login page
+renders, SPA client-side routing works, API auth unchanged for
+unauthenticated requests.
+

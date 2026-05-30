@@ -26,11 +26,46 @@ const PUBLIC_ROUTES = new Set([
   'GET /events',   // SSE — token passed as query param, validated inside route
 ]);
 
+// Path prefixes that belong to the JSON API. Anything that does NOT start
+// with one of these is treated as a dashboard / static asset path and
+// served by fastify-static (or the SPA fallback) without auth — the SPA
+// itself handles auth by reading the JWT from localStorage and bouncing
+// the user to its /login view.
+//
+// Without this, the auth preHandler returns 401 JSON for every URL the
+// browser asks for (`/`, `/index.html`, `/assets/*.js`, `/login`, …) and
+// the dashboard never gets a chance to load.
+const API_PATH_PREFIXES = [
+  '/auth',
+  '/admin',
+  '/health',
+  '/status',
+  '/intents',
+  '/projects',
+  '/maintenance',
+  '/events',
+  '/alerts',
+  '/interventions',
+];
+
+function isApiPath(url: string): boolean {
+  const path = url.split('?')[0] ?? '';
+  return API_PATH_PREFIXES.some((p) => path === p || path.startsWith(`${p}/`));
+}
+
 export async function registerAuthMiddleware(
   app: FastifyInstance,
   sessionConfig: SessionConfig,
 ): Promise<void> {
   app.addHook('preHandler', async (request: FastifyRequest, reply: FastifyReply) => {
+    // GET requests for non-API paths are dashboard / static-asset reads —
+    // let fastify-static or the SPA fallback serve them. The SPA's
+    // `RequireAuth` guard handles unauthenticated access on the client
+    // side (redirect to /login). Non-GET methods always require auth even
+    // if the path looks non-API: a stray write should never land in the
+    // SPA bucket.
+    if (request.method === 'GET' && !isApiPath(request.url)) return;
+
     const routeKey = `${request.method} ${request.routerPath ?? request.url}`;
     if (PUBLIC_ROUTES.has(routeKey)) return;
 

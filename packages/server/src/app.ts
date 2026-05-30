@@ -78,18 +78,30 @@ export async function createApp(
   await registerOversightRoutes(app);
 
   // ─── Dashboard static files ────────────────────────────────────────────────
+  //
+  // fastify-static handles the asset bytes (`/`, `/index.html`,
+  // `/assets/...`). The SPA fallback below serves `index.html` for any
+  // unknown GET path so client-side routing (`/login`, `/agents`, etc.)
+  // can take over inside the SPA. `decorateReply` MUST be true — the
+  // fallback handler calls `reply.sendFile('index.html')`, which is the
+  // helper the plugin attaches when decorateReply is on.
 
   const dashboardDist = join(__dirname, '..', '..', 'dashboard', 'dist');
   try {
     await app.register(staticPlugin, {
       root: dashboardDist,
       prefix: '/',
-      decorateReply: false,
     });
 
-    // SPA fallback — all non-API routes serve index.html
-    app.setNotFoundHandler((_request, reply) => {
-      reply.sendFile('index.html');
+    // SPA fallback — any GET path that isn't a known API route or a
+    // static asset serves `index.html`. The client-side router renders
+    // the appropriate view; the SPA's `RequireAuth` guard handles
+    // unauthenticated state by routing to `/login`.
+    app.setNotFoundHandler((request, reply) => {
+      if (request.method !== 'GET') {
+        return reply.code(404).send({ error: 'Not found' });
+      }
+      return reply.sendFile('index.html');
     });
   } catch {
     log.warn('Dashboard dist not found — serving API only. Run `pnpm build` in dashboard package.');

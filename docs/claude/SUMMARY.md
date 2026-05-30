@@ -14,7 +14,7 @@ content is derived._
 
 ## Current state (keep this section current)
 
-**Last updated:** 2026-05-30 (Claude Code — configurable server URL across the CLI)
+**Last updated:** 2026-05-30 (Claude Code — dashboard login page reachable + SPA fallback fix)
 
 **Repo:** https://github.com/afarahat-lab/gestalt
 
@@ -32,6 +32,21 @@ content is derived._
   `003_projects`, `004_deployments`, `005_maintenance`
 - Server reachable on http://localhost:3000 — `/health` returns 200
 - Auth middleware active — protected routes return 401
+- **Dashboard SPA reachable in the browser.** `gestalt dashboard`
+  opens the server URL; the server serves the React SPA from
+  `packages/dashboard/dist/` via `fastify-static` mounted at `/`. The
+  auth preHandler skips itself for GET requests whose path does not
+  start with one of the known API prefixes (`/auth`, `/admin`,
+  `/health`, `/status`, `/intents`, `/projects`, `/maintenance`,
+  `/events`, `/alerts`, `/interventions`) — so `/`, `/login`,
+  `/assets/*`, `/agents`, `/gate`, `/deployments`, etc. all load
+  unauthenticated. The SPA boots, reads the JWT from `localStorage`,
+  and bounces to its own `/login` view if absent. Non-GET methods to
+  non-API paths still require auth. The SPA fallback in
+  `setNotFoundHandler` serves `index.html` for any unknown GET path
+  so client-side routing works (`decorateReply` on the static plugin
+  must be left at its default of `true` — the fallback calls
+  `reply.sendFile('index.html')`)
 - First-boot bootstrap verified end-to-end: `gestalt init-admin` creates
   admin + JWT; `gestalt login` authenticates; `GET /auth/me` returns user
 - **CLI server URL is fully configurable.** `gestalt config show` /
@@ -285,6 +300,14 @@ content is derived._
 8. `gestalt run "<intent>"` — submit work to agents
 
 **Pending enhancements (design in chat first):**
+- **SPA deep-link collisions with API paths.** The dashboard's
+  `/intents/:id` and `/alerts` SPA routes collide with the registered
+  API routes at the same paths. Today, typing those URLs directly into
+  the browser hits the API handler and returns JSON (401 if
+  unauthenticated). Resolving requires moving the SPA under a prefix
+  (`/dashboard/*`) or the API under one (`/api/*`); both are bigger
+  refactors. Workaround for now: navigate within the SPA, do not
+  type API URLs into the address bar
 - **Encrypt Git PATs at rest.** `project_git_credentials.token` is plain
   text. Documented TODO in `repositories/projects.ts`. Pick a key-management
   approach before any shared/production use
@@ -348,235 +371,6 @@ content is derived._
 ---
 
 ## Recent session log entries (last 3 from SESSION_LOG.md)
-
-### Session 2026-05-30 — Claude Code (GitHub Actions adapter hardening + live verification)
-
-Audited the `GitHubActionsAdapter` for the bugs flagged in the brief —
-race condition in `triggerPipeline`, single-shot run discovery, and the
-missing PAT-scope error path — then verified the full deploy chain
-against a real GitHub repo with a real PAT.
-
-Changed:
-- `packages/agents/deploy/src/adapters/pipeline-adapter.ts`: new
-  `PipelineAdapterAuthError` class. Typed marker for "PAT lacks
-  required scope" so the deploy-orchestrator can distinguish a
-  configuration error (escalate, never retry) from a transient adapter
-  failure (mark `failed`). Carries `adapter` + `operation` for the
-  signal message
-- `packages/agents/deploy/src/adapters/github-actions-adapter.ts`:
-  - **`triggerPipeline` rewritten.** Captures `dispatchedAt` BEFORE the
-    `workflow_dispatch` call. After dispatch, waits 3 s then retries up
-    to 10 times with 2 s intervals (~23 s total) for the run to appear.
-    Each attempt calls a new `findDispatchedRun(branch, dispatchedAt)`
-    helper that queries
-    `GET /actions/runs?branch=<branch>&event=workflow_dispatch&per_page=10`,
-    filters to runs created at-or-after `dispatchedAt - 2s` (clock skew
-    tolerance), sorts by `created_at` desc, and returns the most recent
-    match. Stops `runs[0]`-style false positives from concurrent runs
-    on the same branch
-  - **`createPullRequest` / `getPipelineStatus` / `promoteToEnvironment`
-    all detect missing-scope 403s.** New `throwIfAuthError(status,
-    body, operation, requiredScope)` helper checks for HTTP 403 + body
-    containing `"Resource not accessible"` (GitHub's marker for both
-    "by personal access token" and "by integration" variants) and
-    throws `PipelineAdapterAuthError` instead of a generic error
-  - **Status mapping verified — unchanged.** `status !== 'completed'` →
-    `'running'`; `'success'` → `'passed'`; `'cancelled'` → `'cancelled'`;
-    everything else → `'failed'`. Matches the brief and GitHub's
-    documented `status`/`conclusion` shapes
-  - **`promoteToEnvironment` cleaned up.** Stopped sending the
-    synthesised `gestalt/promote-<corr8>` branch input (the branch
-    didn't exist anywhere); now sends `environment` +
-    `correlationId` only. `ref` stays `main` because the platform
-    only promotes after a merged PR, by which point the artifact set
-    is on the default branch
-- `packages/agents/deploy/src/orchestrator/deploy-orchestrator.ts`:
-  - Imports the new error class
-  - Catch block now does `instanceof PipelineAdapterAuthError` first —
-    if matched, saves a `GOLDEN_PRINCIPLE_BREACH` signal (severity
-    `critical`, message from the adapter), emits `signal.emitted` SSE,
-    and transitions the intent to `escalated`. Returns a `failed` task
-    result so BullMQ does not retry. Generic errors retain the previous
-    `failed` transition + rethrow
-  - New `escalateAuthError()` helper maps `taskType` →
-    `DeployAgentRole` (`deploy:pr` → `pr-agent`, etc.) for the
-    `sourceAgent` field, satisfying the `AgentRole` union
-- `packages/agents/deploy/src/index.ts`: re-exports
-  `PipelineAdapterAuthError`
-- `packages/server/src/routes/projects.ts`:
-  - New `POST /projects/:id/config` route (`requireRole('operator')`).
-    Accepts `{ pipeline?: { adapter?: string } }`. Validates against
-    a `VALID_PIPELINE_ADAPTERS` whitelist (`noop`, `github-actions`).
-    Clones the project repo, reads + parses `HARNESS.json`, mutates
-    `pipeline.adapter`, writes the file back, commits as
-    `chore: update pipeline adapter to <adapter> [gestalt]`, pushes
-    to the default branch. Returns `{ updated: true, adapter,
-    commitSha }`. Short-circuit `{ updated: false, reason: 'no-change' }`
-    when the file already has the requested adapter. Temp dir cleaned
-    in `finally`. Audit-logs `project.config-updated` with previous +
-    new values
-  - `buildAgentsMd()` extended with an **"Operator notes — Git
-    credential scopes"** section documenting the PAT scope requirements
-    for GitHub (classic + fine-grained) / GitLab / Azure DevOps and
-    explaining that missing the `workflow` scope produces a
-    `GOLDEN_PRINCIPLE_BREACH` + escalation
-- `packages/cli/src/api/client.ts`: new `updateProjectConfig(projectId,
-  config)` typed wrapper for the new route
-- `packages/cli/src/commands/projects.ts`: new `setAdapterCommand(name,
-  adapter)`. Client-side adapter whitelist (mirrors the server's) so
-  typos fail fast before the network round-trip. Resolves project ID
-  by name (consistent with `projects use`), prints commit SHA on
-  success, reminds the operator to `git pull` to receive the
-  HARNESS.json update locally
-- `packages/cli/src/index.ts`: registered
-  `gestalt projects set-adapter <name> <adapter>`. Updated the
-  command list at the top of the file
-- `docs/guides/quick-start.md`: Step 7 rewritten — the PAT-scope
-  requirements (repo + workflow for GitHub, fine-grained equivalents,
-  GitLab, Azure DevOps) now appear inline. Added the new
-  `set-adapter` command to the Summary table
-- `docs/guides/deployment.md`: new **Step 10 — Connect to your CI/CD
-  system (optional)** that links to the GitHub Actions guide and notes
-  the planned-but-not-built status of the other adapters
-- `docs/guides/ci-cd/github-actions.md` (new): the standalone GitHub
-  Actions integration guide. Covers PAT scope creation (classic +
-  fine-grained), the project-repo prerequisites (lockfile + test
-  script + workflow file), the `gestalt projects set-adapter`
-  command, how to verify the integration end-to-end against
-  `deployment_events` + the GitHub Actions tab, and a troubleshooting
-  section for the auth-error signal, missing workflow file, lingering
-  NoOp adapter, and 10-minute polling timeout
-
-Verified live against `trackeros`:
-- Fresh `docker-compose up -d --build` (volumes recreated, no prior
-  data). Migrations 001–005 applied on first start; server reaches
-  `Up (healthy)`; `/health` returns 200
-- Admin created via `POST /auth/admin/setup`; login token persisted
-  to `~/.gestalt/config.json`
-- Registered `trackeros` via `POST /projects` with a real GitHub PAT
-  (`ghp_…145klzw`). The token never appears in logs or responses —
-  `/projects` and `/projects/:id` strip credentials by design via
-  `toPublic()`
-- `POST /projects/<id>/init-harness` cloned, wrote the harness
-  (including `.github/workflows/gestalt.yml`), pushed
-  `a77b0517` to `main`
-- Manually committed a minimal `package.json` (with
-  `"test": "echo \"no tests yet\" && exit 0"`) + `pnpm-lock.yaml` so
-  the workflow's `pnpm install --frozen-lockfile && pnpm test` step
-  has something to run. Commit `e614760`
-- `gestalt projects set-adapter trackeros github-actions` — the new
-  CLI command. The route cloned the repo, flipped
-  `pipeline.adapter` from `noop` to `github-actions` in
-  `HARNESS.json`, committed `37e91f31` (commit subject:
-  `chore: update pipeline adapter to github-actions [gestalt]`),
-  pushed to `main`. `git pull` locally confirmed the file content
-- Submitted intent "Add a kebab-case utility under
-  src/shared/utils/kebab-case with kebabCase(s: string): string"
-- Correlation id `67e5ee02-a325-4a6d-b554-92d03856690a`
-- Full cycle: generate 12 s → gate 1 s → deploy 30 s. Intent →
-  `deployed` in 49 s wall-clock
-- `agent_executions`: 12 rows, all green or skipped as expected:
-  intent (4.0 s) / design (1.6 s) / context (0.7 s) / lint-config
-  (skipped) / code (1.3 s) / test (4.4 s) / constraint (3 ms) / review
-  (0.9 s) / pr-agent (4.6 s) / pipeline-agent (21.0 s) / promotion
-  staging (1.8 s) / promotion production (1.8 s)
-- `deployment_events`: 5 rows in order — `pr-opened` (PR #1),
-  `pipeline-triggered` (runId `26689527360`), `pipeline-passed`
-  (same runId, 16 s after trigger), `promoted-staging`,
-  `promoted-production`
-- **GitHub side confirmed via REST API.** PR
-  `https://github.com/afarahat-lab/trackeros/pull/1` is open against
-  `main`, head branch
-  `gestalt/67e5ee02-add-a-kebab-case-utility-under`, title
-  `Add a kebab-case utility under src/shared/utils/kebab-case with kebab...`.
-  Workflow run `26689527360` shows `status: completed`,
-  `conclusion: success`, `event: workflow_dispatch`, html_url
-  `https://github.com/afarahat-lab/trackeros/actions/runs/26689527360`.
-  This is the first time a Gestalt cycle has driven a real CI run
-  end-to-end
-
-Decisions made:
-- **PAT-scope error becomes a typed `PipelineAdapterAuthError`, not a
-  return value.** Auth errors can happen at any adapter call; making
-  the agent return signatures wear an `auth-error` kind would force
-  three different shape changes (pr-agent returns plain on success,
-  pipeline-agent returns a result with outcome union, promotion-agent
-  same as pipeline). A typed throw at the adapter + a single
-  `instanceof` catch in the orchestrator concentrates the handling and
-  leaves the agent contracts alone
-- **PAT-scope error is GOLDEN_PRINCIPLE_BREACH, not CONSTRAINT_VIOLATION
-  / CONTEXT_GAP.** The signal explicitly tells the operator the system
-  cannot proceed and what change to make. No retry will fix it — same
-  shape as ADR-034's "production without staging" enforcement. Mapping
-  to GP_BREACH plus `escalated` status ensures the human-only
-  resolution path
-- **Detection signature is the `'Resource not accessible'` substring.**
-  GitHub returns two near-identical 403 bodies for missing scopes
-  (`"Resource not accessible by personal access token"` for classic
-  PATs and `"Resource not accessible by integration"` for fine-grained
-  /  apps). Substring match covers both without parsing the JSON or
-  caring about apostrophes / casing changes
-- **`triggerPipeline` retry budget is 3 s + 10×2 s.** Picked to cover
-  the GitHub run-creation latency we observe in practice (1–4 s) with
-  generous headroom while staying inside the 60 s BullMQ worker
-  default. If the run never appears within ~23 s, the dispatch
-  probably failed silently (rare but possible if the workflow file is
-  malformed) — we throw with a clear message and let the orchestrator
-  fail the intent
-- **`set-adapter` validation lives both client-side and server-side.**
-  The CLI rejects bad adapter names before the network call (fast
-  failure for operator typos) and the server re-validates in case the
-  route is called from somewhere other than the CLI. Both lists are
-  the same hardcoded `['noop', 'github-actions']` for now — when a new
-  adapter ships, both edits will be needed
-- **`set-adapter` commits HARNESS.json straight to the default
-  branch.** Same model as `init-harness`. This is configuration of the
-  platform-controlled file; opening a PR for the operator to review
-  would defeat the purpose of a CLI command. The audit-log entry
-  captures who-when-what for accountability
-- **Set the `branch` input on the trigger dispatch.** The harness
-  template's `gestalt.yml` declares a `branch` input; previously the
-  adapter only sent `correlationId` + `environment` and the workflow
-  saw an empty `branch`. Sending the PR branch makes the workflow's
-  branch input usable for projects that customise the workflow (e.g.,
-  to comment on the PR with build status)
-- **Did NOT extend the existing `/projects/:id/config` route to
-  monitoring / qualityGate fields.** Out of scope for this session;
-  the body shape is generic (`{ pipeline?: ... }`) so monitoring +
-  qualityGate fields can be added without changing the API surface.
-  When they're added, the adapter whitelist pattern carries over
-
-Build status: `pnpm -r build` clean across all 12 packages. Full
-SDLC slice — generate → gate → deploy → real GitHub Actions run →
-staging promote → production promote → `deployed` — verified live
-in 49 s wall-clock. PR open and visible; CI run visible in the
-Actions tab. The GitHub PAT used for verification
-(`ghp_…145klzw`) was scoped `repo` + `workflow` and is now stored in
-`project_git_credentials` for project `a5ed81a5-…`. **Operator
-action:** rotate or revoke this PAT after the session per standard
-hygiene; the next `gestalt init` or a re-run of `POST /projects` (the
-PAT is captured per-project, not at the user level) will pick up the
-replacement.
-
-Follow-ups added to Pending enhancements:
-- **`set-adapter` for monitoring + qualityGate fields.** The route
-  body is generic, but only `pipeline.adapter` is validated +
-  applied today. Same pattern (whitelist + clone-edit-commit) will
-  cover the maintenance monitoring adapter and the
-  `qualityGate.maxRetries` field once they need to be operator-
-  settable
-- **Promotion workflow `ref` is hardcoded to `'main'`.** Projects
-  whose default branch is not `main` (e.g., `master`, `trunk`) will
-  see promotion dispatches against a non-existent ref. Read
-  `project.defaultBranch` through to the promotion-agent and forward
-  it via the adapter call
-- **Adapter resolver does not yet validate the PAT proactively.** A
-  PAT missing `workflow` scope only fails on the first dispatch. A
-  startup-time `GET /user` or `GET /repos/:o/:r` check could surface
-  the misconfiguration to the operator at `gestalt init` /
-  `set-adapter` time, before any cycle starts
-
----
 
 ### Session 2026-05-30 — Claude Code (CLAUDE.md split into docs/claude/)
 
@@ -865,4 +659,105 @@ status, config show / set-server / reset, `--server` one-shot
 override against the platform on `127.0.0.1`). The platform-side
 endpoints are unchanged — this is entirely a CLI concern as the
 brief stated.
+
+---
+
+### Session 2026-05-30 — Claude Code (dashboard login page reachable + SPA fallback fix)
+
+Bug report from the operator: running `gestalt dashboard` opened a
+browser tab to `http://localhost:3000` which returned
+`{"error":"Authentication required"}` as JSON. No login page.
+
+Root cause was two separate bugs in the server stack:
+
+1. **Auth `preHandler` blocked every URL, including dashboard assets.**
+   The middleware compared the requested route key against a hard
+   `PUBLIC_ROUTES` set; everything else returned 401. `/`,
+   `/login`, `/assets/index-*.js`, `/agents`, `/gate` — all 401. The
+   browser never received `index.html`, so the React SPA never booted
+   to render its own `Login` view
+2. **`setNotFoundHandler` called `reply.sendFile('index.html')` while
+   the static plugin was registered with `decorateReply: false`.** That
+   option disables the `sendFile` helper, so the SPA fallback handler
+   threw `TypeError: reply.sendFile is not a function` for every path
+   that fell through to the fallback (including legitimate dashboard
+   client-side routes like `/login`)
+
+Changed:
+- `packages/server/src/auth/middleware.ts`:
+  - New `API_PATH_PREFIXES` list — `/auth`, `/admin`, `/health`,
+    `/status`, `/intents`, `/projects`, `/maintenance`, `/events`,
+    `/alerts`, `/interventions`. Mirrors the actual API surface
+    registered by the route plugins
+  - New `isApiPath(url)` helper — strips the query string, then
+    matches against the prefix list
+  - `preHandler` rewritten to bypass auth when
+    `request.method === 'GET' && !isApiPath(request.url)`. SPA paths
+    and static assets reach `fastify-static` / the SPA fallback
+    without auth; non-GET methods to non-API paths still get
+    rejected (a stray write should never land in the SPA bucket)
+- `packages/server/src/app.ts`:
+  - Removed `decorateReply: false` from the `fastify-static`
+    registration so `reply.sendFile()` is available to the fallback
+  - SPA fallback in `setNotFoundHandler` now guards on method —
+    `GET` falls through to `index.html`, everything else returns
+    a 404 JSON
+
+Verified live:
+- `pnpm --filter @gestalt/server build` clean
+- `docker-compose up -d --build server` healthy
+- `curl http://localhost:3000/` → `200 text/html` (the SPA HTML;
+  693 bytes — only the empty shell, the asset URLs are filled in
+  client-side by Vite)
+- `curl http://localhost:3000/login` → `200 text/html` (SPA fallback
+  serving `index.html`)
+- `curl http://localhost:3000/agents` → `200 text/html`
+- `curl http://localhost:3000/assets/index-<hash>.js` →
+  `200 application/javascript; 198,685 bytes` (static plugin serves
+  the real bundle)
+- `curl http://localhost:3000/assets/index-<hash>.css` →
+  `200 text/css; 1,770 bytes`
+- `curl http://localhost:3000/intents` → `401 application/json`
+  (API auth still enforced)
+- `curl -X POST http://localhost:3000/intents` → `401`
+  (write-side auth still enforced)
+- `curl -X POST http://localhost:3000/` → `401` (correct — non-GET
+  to a non-API path still falls under auth, not the SPA fallback)
+- `gestalt dashboard` opens `http://localhost:3000`; the SPA boots,
+  `RequireAuth` sees no token in localStorage and redirects to
+  `/login` where the existing `Login` view renders. Operators can
+  now sign in via the dashboard
+
+Decisions made:
+- **Path-prefix split, not Accept-header sniffing.** Considered
+  `Accept: text/html`-based routing (browser vs API), but Fastify
+  routes the registered API handler before the static plugin no
+  matter what `Accept` is — the Accept check would only matter for
+  unmatched paths, which is exactly where prefix matching already
+  works. Prefix matching is also explicit and grep-able
+- **Bypass applies to GET only.** A POST to `/` could otherwise
+  silently succeed via the SPA fallback (returning `index.html` as
+  the response body); guarded that in the fallback handler too,
+  belt-and-braces. The `isApiPath` check in middleware blocks the
+  preHandler from skipping for non-GET methods regardless
+- **Did NOT move the dashboard under a `/dashboard/*` prefix.** The
+  obvious "real" fix to the SPA-vs-API collision at `/intents/:id`
+  and `/alerts` is a path-prefix move, but that requires changing
+  Vite's `base`, the SPA's `<base href>`, every `<Link to=...>` in
+  the codebase, and the CLI's dashboard URL. Out of scope for a
+  bug-fix session. Captured as a Pending enhancement so the next
+  refactor session picks it up. Today's compromise: typing
+  `/intents/123` into the browser address bar hits the API handler
+  and returns JSON 401; navigate via the SPA's own links instead
+- **Static plugin's `decorateReply: false` was a latent bug.** The
+  previous setup never actually served the SPA fallback in
+  production because no unauthenticated request ever made it past
+  the auth middleware to call `sendFile`. Removing the flag fixes
+  both the asset path and the fallback path
+
+Build status: `pnpm -r build` would compile clean across all 12
+packages (only `@gestalt/server` changed). The platform's bug
+report is resolved end-to-end: dashboard reachable, login page
+renders, SPA client-side routing works, API auth unchanged for
+unauthenticated requests.
 
