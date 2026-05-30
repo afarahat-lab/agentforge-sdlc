@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ApiProvider } from './hooks/useApi';
+import { ProjectProvider } from './context/ProjectContext';
 import { DashboardApiClient } from './api/client';
 import { Layout } from './components/layout/Layout';
 import { Login } from './views/Login';
@@ -39,7 +40,13 @@ export default function App() {
             path="/"
             element={
               <RequireAuth>
-                <Layout />
+                {/* ProjectProvider sits inside RequireAuth so the
+                    `/projects` call only fires for authenticated
+                    sessions, and outside the Routes so every view
+                    sees the same context. */}
+                <ProjectProvider>
+                  <Layout />
+                </ProjectProvider>
               </RequireAuth>
             }
           >

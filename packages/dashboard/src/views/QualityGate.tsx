@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useDashboardApi } from '../hooks/useApi';
 import { useLiveEvent } from '../hooks/useLiveEvents';
+import { useProject } from '../context/ProjectContext';
 import { StatusBadge, SignalBadge } from '../components/shared/StatusBadge';
 import { PageHeader, Card, EmptyState, LoadingSpinner } from '../components/shared/PageHeader';
 
@@ -14,16 +15,17 @@ interface GateEntry {
 
 export function QualityGate() {
   const api = useDashboardApi();
+  const { currentProjectId } = useProject();
   const [gates, setGates] = useState<GateEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [filter, setFilter] = useState<string>('');
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    if (!currentProjectId) { setGates([]); setLoading(false); return; }
     try {
       // Fetch recent intents and show their gate results
-      const projectId = localStorage.getItem('gestalt_project') ?? 'default';
-      const res = await api.listIntents({ projectId, limit: 30 });
+      const res = await api.listIntents({ projectId: currentProjectId, limit: 30 });
       // Build gate entries from intents that have been through the gate
       const gateIntents = (res.data ?? []).filter(i =>
         ['approved', 'deploying', 'deployed', 'failed', 'escalated'].includes(i.status)
@@ -50,14 +52,27 @@ export function QualityGate() {
       );
       setGates(entries);
     } catch { /* */ } finally { setLoading(false); }
-  };
+  }, [api, currentProjectId]);
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [load]);
   useLiveEvent('gate.completed', () => void load());
 
   const filtered = filter ? gates.filter(g => g.verdict === filter) : gates;
 
   if (loading) return <LoadingSpinner />;
+  if (!currentProjectId) {
+    return (
+      <div>
+        <PageHeader title="Quality gate" subtitle="no project selected" />
+        <div style={{ padding: '20px 28px' }}>
+          <EmptyState
+            message="No projects yet"
+            hint={'Run `gestalt init` on the CLI to register a project.'}
+          />
+        </div>
+      </div>
+    );
+  }
 
   const counts = { pass: 0, fail: 0, escalate: 0 };
   gates.forEach(g => counts[g.verdict]++);

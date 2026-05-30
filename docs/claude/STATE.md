@@ -8,7 +8,7 @@ the historical record of how the state evolved._
 
 ## Current state (keep this section current)
 
-**Last updated:** 2026-05-31 (Claude Code — clarification text persisted on the intents row; survives gate retries)
+**Last updated:** 2026-05-31 (Claude Code — global dashboard project selector + per-view localStorage cleanup)
 
 **Repo:** https://github.com/afarahat-lab/gestalt
 
@@ -144,11 +144,39 @@ the historical record of how the state evolved._
   `projectId` from `localStorage.getItem('gestalt_project')` with
   fallback `'default'` — that string never matched a real
   `project_id` and `listIntents` always returned zero rows (so
-  failed intents had no trace in the dashboard). Fixed by fetching
-  `/projects` on mount, persisting the selected id under
-  `gestalt_project_id`, and rendering a project selector dropdown
-  in the page header. No status filter is applied to `listIntents`
-  — the feed shows the full intent timeline for the project
+  failed intents had no trace in the dashboard). No status filter
+  is applied to `listIntents` — the feed shows the full intent
+  timeline for the project
+- **Project selection is global across the entire dashboard.**
+  `packages/dashboard/src/context/ProjectContext.tsx` fetches
+  `/projects` once on mount, hydrates from
+  `localStorage.gestalt_project_id` if present, falls back to
+  `projects[0]` if the stored id is missing or no longer
+  resolves, and persists every change back to `localStorage`. The
+  Layout sidebar renders a `<select>` between the logo and the
+  navigation links — switching projects there applies
+  immediately to every project-scoped view (IntentFeed / Alerts /
+  Deployments / QualityGate / Maintenance). ActiveAgents stays
+  global (agent executions span all projects). Window-focus
+  refetch keeps the project list current when an operator runs
+  `gestalt init` in another terminal (no new SSE event needed).
+  The earlier per-view fetches and localStorage reads
+  (`gestalt_project` with `'default'` fallback in
+  Deployments / QualityGate; the per-view dropdown in IntentFeed)
+  are removed. Every project-scoped view guards on
+  `!currentProjectId` with an EmptyState pointing at
+  `gestalt init`. Alerts are project-scoped client-side by
+  joining `alert.context.intentId` against the project's intent
+  list (the `/alerts` API has no `projectId` filter — captured as
+  a Pending enhancement). Verified live: selector renders with
+  the existing project pre-selected, the IntentFeed shows
+  "3 total · trackeros" with all three intents (escalated +
+  needs-input + failed) including the older `failed` one the
+  operator originally reported as invisible; all five
+  project-scoped views render with the selector value in the
+  sidebar across navigations; reload retains the choice; clearing
+  localStorage falls back to `projects[0]`; a bogus stored id
+  also falls back cleanly
 - **Maintenance layer wired end-to-end (ADR-018, ADR-019, ADR-020,
   ADR-035).** Four scheduled agents run in-process via `node-cron`,
   registered as `startMaintenanceScheduler(config)` at server.ts step 9:
@@ -377,6 +405,15 @@ the historical record of how the state evolved._
 8. `gestalt run "<intent>"` — submit work to agents
 
 **Pending enhancements (design in chat first):**
+- **`GET /alerts` has no `projectId` filter.** The dashboard's
+  Alerts view filters client-side by joining each alert's
+  `context.intentId` against the current project's intent list,
+  which costs an extra `/intents?projectId=…` call per refresh.
+  A server-side query parameter that joins the alerts table to
+  intents (or to a `project_id` column added directly on
+  `alerts`) would let the API return the filtered set in one
+  call and let the Layout's badge count match the visible list
+  without extra plumbing
 - **POST /interventions still a 501 stub.** The clarification flow
   bypasses it (uses `POST /intents/:id/clarify` directly because
   that endpoint owns the resume side effect). When breach

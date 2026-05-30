@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useDashboardApi } from '../hooks/useApi';
 import { useLiveEvent } from '../hooks/useLiveEvents';
+import { useProject } from '../context/ProjectContext';
 import { SignalBadge } from '../components/shared/StatusBadge';
 import { PageHeader, Card, EmptyState, LoadingSpinner, Button } from '../components/shared/PageHeader';
 import type { Alert } from '../types';
@@ -20,7 +21,14 @@ import type { Alert } from '../types';
 
 export function Alerts() {
   const api = useDashboardApi();
+  const { currentProjectId } = useProject();
   const [alerts, setAlerts] = useState<Alert[]>([]);
+  // Set of intentIds that belong to the currently selected project.
+  // The alerts API itself has no `projectId` filter (Pending enhancement
+  // — would need a new query parameter on /alerts that joins on intents).
+  // For now we fetch the project's intents and filter alerts client-side
+  // by checking each alert's `context.intentId` against the set.
+  const [projectIntentIds, setProjectIntentIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [notes, setNotes] = useState('');
@@ -28,17 +36,28 @@ export function Alerts() {
   const [submitting, setSubmitting] = useState(false);
   const [confirmation, setConfirmation] = useState<string | null>(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    if (!currentProjectId) {
+      setAlerts([]);
+      setProjectIntentIds(new Set());
+      setLoading(false);
+      return;
+    }
     try {
-      const res = await api.listAlerts({ acknowledged: false });
-      setAlerts(res.alerts ?? []);
+      const [alertsRes, intentsRes] = await Promise.all([
+        api.listAlerts({ acknowledged: false }),
+        api.listIntents({ projectId: currentProjectId, limit: 200 }),
+      ]);
+      setAlerts(alertsRes.alerts ?? []);
+      setProjectIntentIds(new Set((intentsRes.data ?? []).map((i) => i.id)));
     } catch { /* */ } finally { setLoading(false); }
-  };
+  }, [api, currentProjectId]);
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [load]);
   useLiveEvent('alert.created', () => void load());
   useLiveEvent('alert.acknowledged', () => void load());
   useLiveEvent('intent.status-changed', () => void load());
+  useLiveEvent('intent.created', () => void load());
 
   const alert_fn = window.alert;
 
@@ -103,9 +122,34 @@ export function Alerts() {
   };
 
   if (loading) return <LoadingSpinner />;
+  if (!currentProjectId) {
+    return (
+      <div>
+        <PageHeader title="Alerts" subtitle="no project selected" />
+        <div style={{ padding: '20px 28px' }}>
+          <EmptyState
+            message="No projects yet"
+            hint={'Run `gestalt init` on the CLI to register a project.'}
+          />
+        </div>
+      </div>
+    );
+  }
 
   const SEVERITY_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
-  const sorted = [...alerts].sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9));
+  // Project filter — client-side: keep alerts whose intentId belongs to
+  // the current project's intent set. Alerts without an intentId
+  // (project-level / global) pass through; these are rare today
+  // (clarification alerts always carry intentId in context).
+  const projectScoped = alerts.filter((a) => {
+    const ctx = (a.context ?? {}) as Record<string, unknown>;
+    const intentId = typeof ctx['intentId'] === 'string' ? (ctx['intentId'] as string) : null;
+    if (!intentId) return true;
+    return projectIntentIds.has(intentId);
+  });
+  const sorted = [...projectScoped].sort(
+    (a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9),
+  );
 
   return (
     <div>

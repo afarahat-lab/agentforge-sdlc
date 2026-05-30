@@ -95,14 +95,20 @@ export class DashboardApiClient {
   // ─── Maintenance ───────────────────────────────────────────────────────────
 
   async listMaintenanceRuns(params?: {
+    projectId?: string;
     agentRole?: string;
     limit?: number;
   }): Promise<{ runs: MaintenanceRunSummary[]; total: number }> {
     return this.get('/maintenance/runs', params);
   }
 
-  async triggerMaintenanceAgent(agentRole: string): Promise<{ queued: true }> {
-    return this.post('/maintenance/trigger', { agentRole });
+  /**
+   * `projectId` is REQUIRED by the server (a maintenance trigger always
+   * runs against a specific project). The signature is widened to take
+   * it so the dashboard can pass it through from the project context.
+   */
+  async triggerMaintenanceAgent(agentRole: string, projectId: string): Promise<{ queued: true }> {
+    return this.post('/maintenance/trigger', { agentRole, projectId });
   }
 
   // ─── Live events (SSE) ─────────────────────────────────────────────────────

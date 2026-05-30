@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useDashboardApi } from '../hooks/useApi';
 import { useLiveEvent } from '../hooks/useLiveEvents';
+import { useProject } from '../context/ProjectContext';
 import { PageHeader, Card, EmptyState, LoadingSpinner, Button } from '../components/shared/PageHeader';
 import type { MaintenanceRunSummary } from '../types';
 
@@ -13,24 +14,27 @@ const AGENT_SCHEDULES: Record<string, string> = {
 
 export function Maintenance() {
   const api = useDashboardApi();
+  const { currentProjectId } = useProject();
   const [runs, setRuns] = useState<MaintenanceRunSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [triggering, setTriggering] = useState<string | null>(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    if (!currentProjectId) { setRuns([]); setLoading(false); return; }
     try {
-      const res = await api.listMaintenanceRuns({ limit: 20 });
+      const res = await api.listMaintenanceRuns({ projectId: currentProjectId, limit: 20 });
       setRuns(res.runs ?? []);
     } catch { /* */ } finally { setLoading(false); }
-  };
+  }, [api, currentProjectId]);
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [load]);
   useLiveEvent('maintenance.run-completed', () => void load());
 
   const handleTrigger = async (agentRole: string) => {
+    if (!currentProjectId) return;
     setTriggering(agentRole);
     try {
-      await api.triggerMaintenanceAgent(agentRole);
+      await api.triggerMaintenanceAgent(agentRole, currentProjectId);
       setTimeout(() => void load(), 2000);
     } finally { setTriggering(null); }
   };
@@ -42,6 +46,19 @@ export function Maintenance() {
   };
 
   if (loading) return <LoadingSpinner />;
+  if (!currentProjectId) {
+    return (
+      <div>
+        <PageHeader title="Maintenance" subtitle="no project selected" />
+        <div style={{ padding: '20px 28px' }}>
+          <EmptyState
+            message="No projects yet"
+            hint={'Run `gestalt init` on the CLI to register a project.'}
+          />
+        </div>
+      </div>
+    );
+  }
 
   const agents = ['drift-agent', 'alignment-agent', 'gc-agent', 'evaluation-agent'];
 

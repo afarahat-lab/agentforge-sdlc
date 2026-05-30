@@ -14,7 +14,7 @@ content is derived._
 
 ## Current state (keep this section current)
 
-**Last updated:** 2026-05-31 (Claude Code — clarification text persisted on the intents row; survives gate retries)
+**Last updated:** 2026-05-31 (Claude Code — global dashboard project selector + per-view localStorage cleanup)
 
 **Repo:** https://github.com/afarahat-lab/gestalt
 
@@ -150,11 +150,39 @@ content is derived._
   `projectId` from `localStorage.getItem('gestalt_project')` with
   fallback `'default'` — that string never matched a real
   `project_id` and `listIntents` always returned zero rows (so
-  failed intents had no trace in the dashboard). Fixed by fetching
-  `/projects` on mount, persisting the selected id under
-  `gestalt_project_id`, and rendering a project selector dropdown
-  in the page header. No status filter is applied to `listIntents`
-  — the feed shows the full intent timeline for the project
+  failed intents had no trace in the dashboard). No status filter
+  is applied to `listIntents` — the feed shows the full intent
+  timeline for the project
+- **Project selection is global across the entire dashboard.**
+  `packages/dashboard/src/context/ProjectContext.tsx` fetches
+  `/projects` once on mount, hydrates from
+  `localStorage.gestalt_project_id` if present, falls back to
+  `projects[0]` if the stored id is missing or no longer
+  resolves, and persists every change back to `localStorage`. The
+  Layout sidebar renders a `<select>` between the logo and the
+  navigation links — switching projects there applies
+  immediately to every project-scoped view (IntentFeed / Alerts /
+  Deployments / QualityGate / Maintenance). ActiveAgents stays
+  global (agent executions span all projects). Window-focus
+  refetch keeps the project list current when an operator runs
+  `gestalt init` in another terminal (no new SSE event needed).
+  The earlier per-view fetches and localStorage reads
+  (`gestalt_project` with `'default'` fallback in
+  Deployments / QualityGate; the per-view dropdown in IntentFeed)
+  are removed. Every project-scoped view guards on
+  `!currentProjectId` with an EmptyState pointing at
+  `gestalt init`. Alerts are project-scoped client-side by
+  joining `alert.context.intentId` against the project's intent
+  list (the `/alerts` API has no `projectId` filter — captured as
+  a Pending enhancement). Verified live: selector renders with
+  the existing project pre-selected, the IntentFeed shows
+  "3 total · trackeros" with all three intents (escalated +
+  needs-input + failed) including the older `failed` one the
+  operator originally reported as invisible; all five
+  project-scoped views render with the selector value in the
+  sidebar across navigations; reload retains the choice; clearing
+  localStorage falls back to `projects[0]`; a bogus stored id
+  also falls back cleanly
 - **Maintenance layer wired end-to-end (ADR-018, ADR-019, ADR-020,
   ADR-035).** Four scheduled agents run in-process via `node-cron`,
   registered as `startMaintenanceScheduler(config)` at server.ts step 9:
@@ -383,6 +411,15 @@ content is derived._
 8. `gestalt run "<intent>"` — submit work to agents
 
 **Pending enhancements (design in chat first):**
+- **`GET /alerts` has no `projectId` filter.** The dashboard's
+  Alerts view filters client-side by joining each alert's
+  `context.intentId` against the current project's intent list,
+  which costs an extra `/intents?projectId=…` call per refresh.
+  A server-side query parameter that joins the alerts table to
+  intents (or to a `project_id` column added directly on
+  `alerts`) would let the API return the filtered set in one
+  call and let the Layout's badge count match the visible list
+  without extra plumbing
 - **POST /interventions still a 501 stub.** The clarification flow
   bypasses it (uses `POST /intents/:id/clarify` directly because
   that endpoint owns the resume side effect). When breach
@@ -460,170 +497,6 @@ content is derived._
 ---
 
 ## Recent session log entries (last 3 from SESSION_LOG.md)
-
-### Session 2026-05-30 — Claude Code (SPA mounted under /app/* for shareable deep links)
-
-Closes the Pending enhancement from the previous session: dashboard
-URLs were not shareable because the SPA's `/intents/:id` and `/alerts`
-routes collided with API routes at the same paths. Pasting a URL
-copied from the dashboard into a new tab hit the API handler and
-returned JSON 401 instead of the dashboard view. Operator-flagged as
-a real UX issue; resolved by moving the entire SPA under a `/app/*`
-prefix so the URL spaces are disjoint.
-
-Changed:
-- `packages/dashboard/vite.config.ts`: added `base: '/app/'`. The
-  built `index.html` now references `/app/assets/<hash>.{js,css}`
-  instead of `/assets/<hash>.{js,css}`. Vite handles every absolute
-  asset URL in the bundle automatically — no per-file edits needed
-- `packages/dashboard/src/App.tsx`:
-  `<BrowserRouter>` → `<BrowserRouter basename="/app">`. Every
-  `navigate(...)`, `<Link to=...>`, `<NavLink to=...>`, and
-  `<Navigate to=...>` in the SPA is now interpreted relative to
-  `/app`; e.g. the Login view's post-success `navigate('/')`
-  resolves to `/app/` in the URL bar, the Layout's `navigate('/login')`
-  becomes `/app/login`, IntentFeed's
-  `navigate(\`/intents/${id}\`)` becomes `/app/intents/${id}`. The
-  audit upfront (grep across the SPA) confirmed no string-
-  concatenated absolute URLs would need separate edits
-- `packages/server/src/app.ts`:
-  - `staticPlugin` prefix changed from `/` to `/app/`
-  - New `app.get('/', ...)` handler 302-redirects to `/app/`. The
-    bare URL is what operators type by hand and what older sessions
-    of `gestalt dashboard` left in their history; the redirect lands
-    them in the SPA without an opaque 401
-  - `setNotFoundHandler` rewritten as a three-branch dispatch:
-    non-GET → 404 JSON; GET under `/app/` (or exact `/app`) → serve
-    `index.html` (SPA fallback for client-side routes like
-    `/app/login`, `/app/intents/:id`); anything else → 404 JSON.
-    Without that last branch, a typo at `/intnts` would silently
-    serve the SPA shell whose asset refs now point at
-    `/app/assets/...` and so the browser would render a blank page
-- `packages/server/src/auth/middleware.ts`:
-  - Dropped the `API_PATH_PREFIXES` list and `isApiPath` helper —
-    no longer needed because the SPA bucket is now a single prefix
-  - New `isSpaPath(url)` matches `/app` or `/app/*`
-  - Auth preHandler bypass simplified to
-    `if (request.method === 'GET' && isSpaPath(request.url)) return;`
-  - Added `'GET /'` to `PUBLIC_ROUTES` so the new redirect handler
-    can fire without auth (it's a registered route, so the preHandler
-    runs before the handler)
-- `packages/cli/src/commands/logs.ts`: `dashboardCommand` now opens
-  `${resolveServerUrl(...)}/app/` instead of the bare URL. The 302
-  on `/` would still get operators there if they type the bare URL,
-  but the CLI shows the canonical path so users learn the URL shape
-  their copied URLs will carry
-- `docs/guides/quick-start.md`: Step 9 dashboard snippet updated —
-  the comment now reads "Opens http://localhost:3000/app/" and a
-  short paragraph explains the shareable-URL property
-
-Verified live end-to-end. Dashboard image rebuilt
-(`pnpm --filter @gestalt/dashboard build` regenerates the asset
-hashes), server image rebuilt
-(`docker-compose up -d --build server`). Server running healthy.
-
-Server-side smoke (curl, every routing branch):
-- `GET /` → `302  Location=http://localhost:3000/app/` ✅
-- `GET /app/` → `200 text/html; 701 bytes` ✅
-- `GET /app/login` → `200 text/html; 701 bytes` (SPA fallback) ✅
-- `GET /app/intents/abc-123` → `200 text/html; 701 bytes`
-  (deep-link via SPA fallback) ✅
-- `GET /app/assets/index-BpHu9QYW.js` → `200 application/javascript;
-  198,701 bytes` ✅
-- `GET /intents` → `401 application/json` (API unchanged) ✅
-- `GET /alerts` → `401 application/json` (was the SPA collision;
-  now unambiguously API) ✅
-- `GET /intnts` (typo, unauthenticated) → `401 application/json`
-  (auth fires before the not-found handler) ✅
-- `GET /intnts` (typo, WITH auth) → `404 application/json`
-  (proves the not-found handler returns proper 404 instead of
-  silently serving the SPA shell) ✅
-- `POST /` → `401` ✅
-- `POST /app/something` (with auth) → `404 application/json` ✅
-
-Browser flow (headless Chrome via CDP):
-- A. Bare `http://localhost:3000/` → 302 → `/app/login`; Login
-     view renders with email + password fields
-- B. Submit `admin@test.local` + `localadmin123` → `POST /auth/login`
-     returns 200, URL transitions to `/app/` after 400 ms, IntentFeed
-     view renders with "0 total" and "connected" SSE pill
-- C. Deep link probe in same session — navigated to `/app/agents` →
-     ActiveAgents view renders ("Active agents — idle — No agents
-     running — platform is idle") at URL `/app/agents`
-- D. **Share-URL probe** (the actual bug):
-  opened `/app/intents/share-test-id` in a fresh tab (new
-  `Target.createTarget`, no inherited localStorage) → server
-  served the SPA HTML → SPA boots, `RequireAuth` sees no token →
-  `<Navigate to="/login" replace>` runs through basename, URL
-  becomes `/app/login`, login form renders. Operator can sign in
-  exactly as if they'd opened the dashboard normally. **Before
-  this session, the same paste hit the API at `/intents/:id` and
-  returned `{"error":"Authentication required"}` JSON with no way
-  to recover in-browser.**
-- E. Inverse check — `fetch('/intents/share-test-id')` from the
-     SPA (i.e. the bare API path) still returns `401 application/json
-     {"error":"Authentication required"}`. API contract unchanged
-
-Decisions made:
-- **SPA path is `/app/*`, not `/dashboard/*` or `/ui/*`.** Three
-  characters, one syllable. The exact prefix isn't load-bearing for
-  the implementation — the operator's previous note suggested
-  `/app/*` so kept it
-- **Bare `/` gets a 302 redirect, not the SPA at `/`.** Two reasons:
-  (1) it lets operators type the bare hostname and land somewhere
-  useful; (2) it surfaces the canonical URL shape in the address
-  bar after the redirect, so the first thing they copy is already
-  `/app/...`. Considered serving the SPA at both `/` and `/app/*`
-  but that would resurrect the collision risk for any future
-  bare-path SPA route
-- **The not-found handler refuses to serve the SPA for non-`/app/*`
-  GETs**, even though that means a typo at `/intnts` shows JSON
-  404 rather than the SPA. The alternative (serve `index.html`
-  for everything) means the SPA's `<link>` + `<script>` tags
-  reference `/app/assets/...` while the URL bar shows `/intnts` —
-  if React Router can't match, the user gets a blank dashboard.
-  A clear 404 is better than that silent breakage
-- **Auth middleware: `GET /` is in `PUBLIC_ROUTES`, not bypassed
-  via `isSpaPath`.** They're semantically different — `GET /` is
-  a registered route that exists to redirect; `isSpaPath` bypasses
-  the auth check entirely for fastify-static's static-asset reads.
-  Keeping them separate documents the intent
-- **CLI opens `<url>/app/` explicitly** rather than relying on the
-  302. The redirect would still get operators there, but the CLI's
-  output (`Dashboard opened at http://localhost:3000/app/`) is what
-  most users will copy to share with teammates, so it should show
-  the canonical URL
-- **Did NOT add return-URL preservation across the post-login
-  redirect.** The SPA's Login view does `navigate('/')` on success
-  (which resolves to `/app/`). A share-URL flow currently: paste
-  `/app/intents/foo` → bounce to `/app/login` → after login, land
-  on `/app/` (Intents list), NOT back on the original intent.
-  This is a pre-existing UX gap (the basename move didn't change
-  it) — flagged as a smaller follow-up if it matters
-
-Pending-enhancement entry **"SPA deep-link collisions with API
-paths"** removed from `STATE.md` — resolved.
-
-Build status: `pnpm -r build` clean across all 12 packages. Docker
-server image rebuilt; container `Up (healthy)`. All four CLI
-layers (generate / gate / deploy / maintenance) unchanged and
-running. Dashboard SPA reachable at `/app/*` with shareable
-deep-link URLs; API contract at bare paths unchanged.
-
-Follow-ups added to Pending enhancements:
-- **Return-URL preservation through the post-login redirect.** Today
-  pasting `/app/intents/<id>` in a fresh tab bounces to `/app/login`
-  then lands on `/app/` after sign-in (the intent ID is dropped).
-  React Router's `useLocation()` + a `?from=` query param in the
-  Navigate call would preserve it. ~10 min change in `App.tsx` +
-  `Login.tsx`
-- **Vite dev-server proxy has a dead `/api` entry.** The proxy in
-  `packages/dashboard/vite.config.ts` lists `/api → localhost:3000`
-  but the server has no routes under `/api` (every API route is at
-  the root level). Pre-existing dead config noticed during the
-  audit for this session; cleanup, not a behavior change
-
----
 
 ### Session 2026-05-31 — Claude Code (intent clarification flow + dashboard IntentFeed bug fix)
 
@@ -1018,4 +891,160 @@ Build status: `pnpm -r build` clean across all 12 packages.
 Migration 006 applied. Full vague-intent → clarify → resume →
 gate-retry cycle verified end-to-end; the clarification text
 persists on the intents row through every dispatch leg.
+
+---
+
+### Session 2026-05-31 — Claude Code (global dashboard project selector + per-view localStorage cleanup)
+
+Closes the per-view project-id divergence that the previous
+clarification session only partially fixed. IntentFeed had been
+updated to read from `localStorage.gestalt_project_id` with a real
+project hydrate, but Deployments and QualityGate still read the OLD
+`gestalt_project` key with the `'default'` fallback bug. Every
+project-scoped view should now derive its current project from one
+shared source.
+
+Changed:
+- `packages/dashboard/src/context/ProjectContext.tsx` (new):
+  Provider + `useProject()` hook. On mount it calls
+  `/projects` once; selection rule is
+  `localStorage.gestalt_project_id → projects[0] → null`. Writes
+  the chosen id back to localStorage eagerly so the next reload
+  takes the fast path. Registers a `window 'focus'` handler that
+  re-fetches `/projects` — picks up a new project registered in
+  another terminal without needing a server-side
+  `project.created` SSE event. `setCurrentProjectId(id)` is
+  exposed to consumers and persists on every change. The provider
+  preserves the operator's in-session choice when the server's
+  ordering of `/projects` shifts (no surprise switching mid-session)
+- `packages/dashboard/src/App.tsx`: wraps the authenticated route
+  tree in `<ProjectProvider>` (inside `<RequireAuth>` so the
+  `/projects` fetch only fires for signed-in sessions, outside
+  the `<Routes>` so every view sees the same context)
+- `packages/dashboard/src/components/layout/Layout.tsx`: sidebar
+  gained a `<select>` between the logo and the navigation list —
+  reads from `useProject()`, calls `setCurrentProjectId` on
+  change. While `projectsLoading` it shows `loading...` in
+  muted text; with zero projects it shows
+  `No projects — run gestalt init`. Single-project case still
+  renders the select so the operator can see which project is
+  active. Styled with existing CSS variables
+  (`var(--bg-subtle)` / `var(--border)` / `var(--font-mono)` /
+  `var(--text-primary)` / `var(--text-dim)`)
+- `packages/dashboard/src/views/IntentFeed.tsx`: removed the
+  per-view `/projects` fetch and the in-header `<select>` added
+  in the clarification session. Now reads
+  `useProject().currentProjectId` + `currentProject`. Subtitle
+  becomes `${total} total · ${currentProject.name}`. Empty state
+  distinguishes "no project registered" (run gestalt init) from
+  "no intents yet"
+- `packages/dashboard/src/views/Deployments.tsx`,
+  `QualityGate.tsx`: replaced
+  `localStorage.getItem('gestalt_project') ?? 'default'` (the
+  pre-existing bug) with `useProject().currentProjectId` +
+  guard-return EmptyState when no project is selected
+- `packages/dashboard/src/views/Maintenance.tsx`: passes
+  `projectId` through `listMaintenanceRuns` and
+  `triggerMaintenanceAgent`. The API client's
+  `triggerMaintenanceAgent(agentRole, projectId)` is now
+  required-param (the server has always required `projectId`
+  on `POST /maintenance/trigger`; previously the dashboard
+  call would have 400'd)
+- `packages/dashboard/src/views/Alerts.tsx`: project-scoped
+  client-side. Loads both `/alerts?acknowledged=false` and the
+  current project's intents in parallel, builds a Set of
+  intent IDs, filters alerts whose `context.intentId` matches
+  (alerts without an intentId pass through — none exist today
+  but the contract leaves room). Guard-returns when no project
+  is selected. New `intent.created` SSE subscription keeps the
+  filter set fresh as new intents arrive in the project
+- `packages/dashboard/src/views/ActiveAgents.tsx`: unchanged.
+  Agent executions span all projects (the operator wants to
+  see every running agent, not just those for the current
+  project)
+- `packages/dashboard/src/api/client.ts`:
+  - `listMaintenanceRuns` gained `projectId?` param
+  - `triggerMaintenanceAgent` signature widened to
+    `(agentRole, projectId)` — required-param to match the
+    server contract
+
+Verified live against the running platform:
+- `pnpm --filter @gestalt/dashboard build` clean; `pnpm -r build`
+  clean across all 12 packages
+- Docker server image rebuilt; the new dashboard bundle
+  (`/app/assets/index-Bf8qYMe-.js`, 204 KB) lands cleanly
+- **Headless Chrome drive captured** the IntentFeed with the
+  sidebar selector showing `trackeros` selected, the IntentFeed
+  body showing "3 total · trackeros" with three intents (`make
+  it better` ×2 with `! escalated` + `? needs input` and the
+  older `start implementation` `✗ failed`). Screenshot saved
+- **Navigation drive** (`/app/agents`, `/app/gate`,
+  `/app/deployments`, `/app/maintenance`, `/app/alerts`)
+  confirmed every view renders without crashing and that the
+  sidebar selector value stays at the same UUID across every
+  navigation. The Alerts tab badge in the sidebar shows the
+  global unack count (1) — the in-view list filters to the
+  current project's alerts
+- **Three reload-persistence probes:**
+  - hard reload → selector + localStorage retain the chosen id
+  - clear `gestalt_project_id` + reload → selector
+    auto-selects `projects[0]` and writes the id back to
+    localStorage so the next reload is sticky
+  - set a bogus UUID + reload → selector ignores the stale
+    value, picks `projects[0]`, and overwrites the storage
+- The previous session's two unacknowledged data points (the
+  earlier `61fd59a6` intent at `waiting-for-clarification` and
+  its alert) are visible in the dashboard for the first time —
+  the per-view `'default'` fallback was masking them
+
+Decisions made:
+- **`<ProjectProvider>` lives inside `<RequireAuth>`**, not at
+  the top of the tree. The `/projects` call requires an auth
+  token; mounting the provider outside the auth guard would
+  trigger the fetch on the public `/app/login` page and
+  produce noisy 401s. Inside the guard, the provider mounts
+  exactly when there's a token available
+- **Selector renders even when there is only one project**, per
+  the brief. Hiding a "trivial" dropdown would surprise an
+  operator who registers a second project mid-session — the
+  control just suddenly appears. Always-visible is the kinder
+  affordance
+- **Window-focus refetch, not a new SSE event.** The brief
+  explicitly suggested either; window-focus is one event
+  handler with zero server-side changes and catches the
+  realistic case (operator runs `gestalt init` in a terminal,
+  alt-tabs back to the dashboard). A `project.created` SSE
+  event would be more proactive but is out of scope and would
+  require server-side wiring
+- **Alerts filter client-side, not via a new API parameter.**
+  Brief constraint: no new endpoints. The dashboard's existing
+  `/alerts` + `/intents` calls are enough to compute the
+  filter; the cost is one extra `/intents` request per refresh
+  on the Alerts tab. Pending enhancement logged for a
+  server-side `projectId` filter on `/alerts`
+- **Layout sidebar badge stays global.** It reflects the
+  count of unacknowledged alerts across every project, which
+  matches the bell-icon convention ("you have N things to
+  attend to anywhere"). Scoping the badge to the current
+  project would require the same client-side join the Alerts
+  view does, plus a refresh on project change, for marginal
+  UX gain. Documented this trade-off so the next refresh of
+  the alerts surface picks it up
+- **`gestalt_project_id` is the canonical localStorage key.**
+  Established in the clarification session; this session
+  fixes the two views that were still reading the legacy
+  `gestalt_project` key. No old-key migration code is added —
+  the legacy reads pointed at the literal string `'default'`
+  which never matched a real project anyway, so there is
+  nothing to migrate from
+
+Build status: `pnpm -r build` clean across all 12 packages.
+Dashboard bundle rebuilt; SPA loads under `/app/*`; the global
+project selector is the new single point of truth for which
+project the dashboard is showing.
+
+Follow-up added to Pending enhancements:
+- `GET /alerts` projectId filter (server-side) — would let the
+  dashboard skip the client-side join and let the sidebar
+  badge match the filtered list in the Alerts view
 

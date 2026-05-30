@@ -1,33 +1,51 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useDashboardApi } from '../hooks/useApi';
 import { useLiveEvent } from '../hooks/useLiveEvents';
+import { useProject } from '../context/ProjectContext';
 import { StatusBadge } from '../components/shared/StatusBadge';
 import { PageHeader, Card, EmptyState, LoadingSpinner } from '../components/shared/PageHeader';
 import type { IntentSummary } from '../types';
 
 export function Deployments() {
   const api = useDashboardApi();
+  const { currentProjectId } = useProject();
   const [deployed, setDeployed] = useState<IntentSummary[]>([]);
   const [deploying, setDeploying] = useState<IntentSummary[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const load = async () => {
-    const projectId = localStorage.getItem('gestalt_project') ?? 'default';
+  const load = useCallback(async () => {
+    if (!currentProjectId) {
+      setDeployed([]); setDeploying([]); setLoading(false);
+      return;
+    }
     try {
       const [deployedRes, deployingRes] = await Promise.all([
-        api.listIntents({ projectId, status: 'deployed', limit: 20 }),
-        api.listIntents({ projectId, status: 'deploying', limit: 5 }),
+        api.listIntents({ projectId: currentProjectId, status: 'deployed', limit: 20 }),
+        api.listIntents({ projectId: currentProjectId, status: 'deploying', limit: 5 }),
       ]);
       setDeployed(deployedRes.data ?? []);
       setDeploying(deployingRes.data ?? []);
     } catch { /* */ } finally { setLoading(false); }
-  };
+  }, [api, currentProjectId]);
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [load]);
   useLiveEvent('deployment.updated', () => void load());
   useLiveEvent('intent.status-changed', () => void load());
 
   if (loading) return <LoadingSpinner />;
+  if (!currentProjectId) {
+    return (
+      <div>
+        <PageHeader title="Deployments" subtitle="no project selected" />
+        <div style={{ padding: '20px 28px' }}>
+          <EmptyState
+            message="No projects yet"
+            hint={'Run `gestalt init` on the CLI to register a project.'}
+          />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>

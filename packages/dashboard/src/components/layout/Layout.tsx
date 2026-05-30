@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useDashboardApi } from '../../hooks/useApi';
 import { useLiveEvent } from '../../hooks/useLiveEvents';
+import { useProject } from '../../context/ProjectContext';
 
 const NAV_ITEMS = [
   { path: '/',             label: 'Intents',     icon: '◈' },
@@ -15,6 +16,7 @@ const NAV_ITEMS = [
 export function Layout() {
   const api = useDashboardApi();
   const navigate = useNavigate();
+  const { projects, currentProjectId, setCurrentProjectId, loading: projectsLoading } = useProject();
   const [alertCount, setAlertCount] = useState(0);
   const [connected] = useState(true);
 
@@ -46,6 +48,31 @@ export function Layout() {
         <div style={styles.logo}>
           <span style={styles.logoMark}>◈</span>
           <span style={styles.logoText}>gestalt</span>
+        </div>
+
+        {/* Project selector — sits between the logo and the nav so it
+            reads as "you are looking at this project" rather than as
+            another navigation item. The selection persists via
+            ProjectContext + localStorage and applies to every
+            project-scoped view (Intents / Alerts / Deployments /
+            Gate / Maintenance). */}
+        <div style={styles.projectSelector}>
+          {projectsLoading ? (
+            <p style={styles.projectMuted}>loading...</p>
+          ) : projects.length === 0 ? (
+            <p style={styles.projectMuted}>No projects — run gestalt init</p>
+          ) : (
+            <select
+              value={currentProjectId ?? ''}
+              onChange={(e) => setCurrentProjectId(e.target.value)}
+              style={styles.projectSelect}
+              aria-label="Current project"
+            >
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          )}
         </div>
 
         {/* Nav */}
@@ -130,6 +157,29 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '15px',
     letterSpacing: '0.05em',
     color: 'var(--text-primary)',
+  },
+  projectSelector: {
+    padding: '10px 16px 12px',
+    borderBottom: '1px solid var(--border)',
+    marginBottom: '8px',
+  },
+  projectSelect: {
+    width: '100%',
+    background: 'var(--bg-subtle)',
+    border: '1px solid var(--border)',
+    borderRadius: '5px',
+    padding: '6px 8px',
+    fontSize: '12px',
+    fontFamily: 'var(--font-mono)',
+    color: 'var(--text-primary)',
+    outline: 'none',
+    cursor: 'pointer',
+  },
+  projectMuted: {
+    fontSize: '11px',
+    fontFamily: 'var(--font-mono)',
+    color: 'var(--text-dim)',
+    fontStyle: 'italic',
   },
   navList: {
     listStyle: 'none',

@@ -2184,3 +2184,159 @@ Migration 006 applied. Full vague-intent → clarify → resume →
 gate-retry cycle verified end-to-end; the clarification text
 persists on the intents row through every dispatch leg.
 
+---
+
+### Session 2026-05-31 — Claude Code (global dashboard project selector + per-view localStorage cleanup)
+
+Closes the per-view project-id divergence that the previous
+clarification session only partially fixed. IntentFeed had been
+updated to read from `localStorage.gestalt_project_id` with a real
+project hydrate, but Deployments and QualityGate still read the OLD
+`gestalt_project` key with the `'default'` fallback bug. Every
+project-scoped view should now derive its current project from one
+shared source.
+
+Changed:
+- `packages/dashboard/src/context/ProjectContext.tsx` (new):
+  Provider + `useProject()` hook. On mount it calls
+  `/projects` once; selection rule is
+  `localStorage.gestalt_project_id → projects[0] → null`. Writes
+  the chosen id back to localStorage eagerly so the next reload
+  takes the fast path. Registers a `window 'focus'` handler that
+  re-fetches `/projects` — picks up a new project registered in
+  another terminal without needing a server-side
+  `project.created` SSE event. `setCurrentProjectId(id)` is
+  exposed to consumers and persists on every change. The provider
+  preserves the operator's in-session choice when the server's
+  ordering of `/projects` shifts (no surprise switching mid-session)
+- `packages/dashboard/src/App.tsx`: wraps the authenticated route
+  tree in `<ProjectProvider>` (inside `<RequireAuth>` so the
+  `/projects` fetch only fires for signed-in sessions, outside
+  the `<Routes>` so every view sees the same context)
+- `packages/dashboard/src/components/layout/Layout.tsx`: sidebar
+  gained a `<select>` between the logo and the navigation list —
+  reads from `useProject()`, calls `setCurrentProjectId` on
+  change. While `projectsLoading` it shows `loading...` in
+  muted text; with zero projects it shows
+  `No projects — run gestalt init`. Single-project case still
+  renders the select so the operator can see which project is
+  active. Styled with existing CSS variables
+  (`var(--bg-subtle)` / `var(--border)` / `var(--font-mono)` /
+  `var(--text-primary)` / `var(--text-dim)`)
+- `packages/dashboard/src/views/IntentFeed.tsx`: removed the
+  per-view `/projects` fetch and the in-header `<select>` added
+  in the clarification session. Now reads
+  `useProject().currentProjectId` + `currentProject`. Subtitle
+  becomes `${total} total · ${currentProject.name}`. Empty state
+  distinguishes "no project registered" (run gestalt init) from
+  "no intents yet"
+- `packages/dashboard/src/views/Deployments.tsx`,
+  `QualityGate.tsx`: replaced
+  `localStorage.getItem('gestalt_project') ?? 'default'` (the
+  pre-existing bug) with `useProject().currentProjectId` +
+  guard-return EmptyState when no project is selected
+- `packages/dashboard/src/views/Maintenance.tsx`: passes
+  `projectId` through `listMaintenanceRuns` and
+  `triggerMaintenanceAgent`. The API client's
+  `triggerMaintenanceAgent(agentRole, projectId)` is now
+  required-param (the server has always required `projectId`
+  on `POST /maintenance/trigger`; previously the dashboard
+  call would have 400'd)
+- `packages/dashboard/src/views/Alerts.tsx`: project-scoped
+  client-side. Loads both `/alerts?acknowledged=false` and the
+  current project's intents in parallel, builds a Set of
+  intent IDs, filters alerts whose `context.intentId` matches
+  (alerts without an intentId pass through — none exist today
+  but the contract leaves room). Guard-returns when no project
+  is selected. New `intent.created` SSE subscription keeps the
+  filter set fresh as new intents arrive in the project
+- `packages/dashboard/src/views/ActiveAgents.tsx`: unchanged.
+  Agent executions span all projects (the operator wants to
+  see every running agent, not just those for the current
+  project)
+- `packages/dashboard/src/api/client.ts`:
+  - `listMaintenanceRuns` gained `projectId?` param
+  - `triggerMaintenanceAgent` signature widened to
+    `(agentRole, projectId)` — required-param to match the
+    server contract
+
+Verified live against the running platform:
+- `pnpm --filter @gestalt/dashboard build` clean; `pnpm -r build`
+  clean across all 12 packages
+- Docker server image rebuilt; the new dashboard bundle
+  (`/app/assets/index-Bf8qYMe-.js`, 204 KB) lands cleanly
+- **Headless Chrome drive captured** the IntentFeed with the
+  sidebar selector showing `trackeros` selected, the IntentFeed
+  body showing "3 total · trackeros" with three intents (`make
+  it better` ×2 with `! escalated` + `? needs input` and the
+  older `start implementation` `✗ failed`). Screenshot saved
+- **Navigation drive** (`/app/agents`, `/app/gate`,
+  `/app/deployments`, `/app/maintenance`, `/app/alerts`)
+  confirmed every view renders without crashing and that the
+  sidebar selector value stays at the same UUID across every
+  navigation. The Alerts tab badge in the sidebar shows the
+  global unack count (1) — the in-view list filters to the
+  current project's alerts
+- **Three reload-persistence probes:**
+  - hard reload → selector + localStorage retain the chosen id
+  - clear `gestalt_project_id` + reload → selector
+    auto-selects `projects[0]` and writes the id back to
+    localStorage so the next reload is sticky
+  - set a bogus UUID + reload → selector ignores the stale
+    value, picks `projects[0]`, and overwrites the storage
+- The previous session's two unacknowledged data points (the
+  earlier `61fd59a6` intent at `waiting-for-clarification` and
+  its alert) are visible in the dashboard for the first time —
+  the per-view `'default'` fallback was masking them
+
+Decisions made:
+- **`<ProjectProvider>` lives inside `<RequireAuth>`**, not at
+  the top of the tree. The `/projects` call requires an auth
+  token; mounting the provider outside the auth guard would
+  trigger the fetch on the public `/app/login` page and
+  produce noisy 401s. Inside the guard, the provider mounts
+  exactly when there's a token available
+- **Selector renders even when there is only one project**, per
+  the brief. Hiding a "trivial" dropdown would surprise an
+  operator who registers a second project mid-session — the
+  control just suddenly appears. Always-visible is the kinder
+  affordance
+- **Window-focus refetch, not a new SSE event.** The brief
+  explicitly suggested either; window-focus is one event
+  handler with zero server-side changes and catches the
+  realistic case (operator runs `gestalt init` in a terminal,
+  alt-tabs back to the dashboard). A `project.created` SSE
+  event would be more proactive but is out of scope and would
+  require server-side wiring
+- **Alerts filter client-side, not via a new API parameter.**
+  Brief constraint: no new endpoints. The dashboard's existing
+  `/alerts` + `/intents` calls are enough to compute the
+  filter; the cost is one extra `/intents` request per refresh
+  on the Alerts tab. Pending enhancement logged for a
+  server-side `projectId` filter on `/alerts`
+- **Layout sidebar badge stays global.** It reflects the
+  count of unacknowledged alerts across every project, which
+  matches the bell-icon convention ("you have N things to
+  attend to anywhere"). Scoping the badge to the current
+  project would require the same client-side join the Alerts
+  view does, plus a refresh on project change, for marginal
+  UX gain. Documented this trade-off so the next refresh of
+  the alerts surface picks it up
+- **`gestalt_project_id` is the canonical localStorage key.**
+  Established in the clarification session; this session
+  fixes the two views that were still reading the legacy
+  `gestalt_project` key. No old-key migration code is added —
+  the legacy reads pointed at the literal string `'default'`
+  which never matched a real project anyway, so there is
+  nothing to migrate from
+
+Build status: `pnpm -r build` clean across all 12 packages.
+Dashboard bundle rebuilt; SPA loads under `/app/*`; the global
+project selector is the new single point of truth for which
+project the dashboard is showing.
+
+Follow-up added to Pending enhancements:
+- `GET /alerts` projectId filter (server-side) — would let the
+  dashboard skip the client-side join and let the sidebar
+  badge match the filtered list in the Alerts view
+
