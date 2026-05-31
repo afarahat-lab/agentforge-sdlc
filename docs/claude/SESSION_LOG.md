@@ -2942,3 +2942,157 @@ the next JSONB column; the per-row `::jsonb` cast on the WRITE
 path remains the matching write-side defence (see the
 maintenance-runs and alerts repos).
 
+---
+
+### Session 2026-05-31 — Claude Code (Maintenance view: Recent Runs populated + Run now error UX)
+
+Two adjacent dashboard bugs in the Maintenance view, both rooted
+in a single response-envelope mismatch and a small UX gap.
+
+Investigation (the brief asked for it explicitly):
+- `GET /maintenance/runs` returned `{ data: MaintenanceRunRecord[] }`
+  on the server (matching every other route's envelope), but the
+  dashboard's `DashboardApiClient.listMaintenanceRuns` was typed
+  as `Promise<{ runs, total }>`. The view read `res.runs ?? []`
+  which was permanently `undefined → []`. Recent runs section
+  was always empty — not because runs didn't exist (they did:
+  8 cron-driven evaluation-agent rows, 1 prior manually-
+  triggered drift-agent) but because the dashboard's parse was
+  for a phantom key
+- The "Run now" button itself worked — server returned 200 with
+  the completed `MaintenanceRunRecord` synchronously (the
+  runner is in-process, not BullMQ). The actual gap was that
+  `handleTrigger` used `try/finally` without `try/catch`, so
+  any rejection from the API call would surface as an
+  unhandled promise rejection from an event handler and the
+  operator would see nothing
+- The SSE subscription to `maintenance.run-completed` and the
+  post-trigger `setTimeout(load)` were both already wired in
+  the prior implementation. The brief asked to drop the delay
+  from 2 s to 1 s
+
+Changed:
+- `packages/dashboard/src/api/client.ts`:
+  - `listMaintenanceRuns` return type fixed to
+    `{ data: MaintenanceRunSummary[] }` — matches the actual
+    server envelope. JSDoc explains the prior bug so the next
+    edit doesn't regress
+  - `triggerMaintenanceAgent` return type fixed to
+    `{ data: MaintenanceRunSummary }` — the server returns the
+    completed run record. Comment notes the runner is
+    in-process so the row exists by the time the response lands
+- `packages/dashboard/src/views/Maintenance.tsx`:
+  - `load` reads `res.data ?? []` instead of `res.runs ?? []`
+  - new `triggerErrors: Record<string, string>` state, keyed by
+    agentRole (so an in-flight retry on one agent doesn't blow
+    away another agent's lingering error)
+  - `handleTrigger` rewrapped as `try/catch/finally`. On
+    catch: sets the error, schedules a 5 s auto-clear with a
+    guard that doesn't clobber a newer error from a retry. On
+    success: 1 s delayed `load()` (brief's value) — covers the
+    SSE event path with a backstop and shaves a second off
+    the prior 2 s
+  - red `✗ Failed to trigger: <message>` strip renders under the
+    agent card when `triggerErrors[agent]` is populated. Styled
+    with `var(--red)` on a translucent red background using
+    existing CSS variables only
+  - empty-state hint updated: "Agents run on their configured
+    schedule or via 'run now' above"
+
+Verified live against `trackeros`:
+- `pnpm --filter @gestalt/dashboard build` clean; full
+  workspace build clean
+- Server image rebuilt
+- **Database state before fix:** 8 maintenance_runs rows
+  (7 cron-scheduled evaluation-agent runs with
+  `project_id = NULL`; 1 prior manually-triggered drift-agent
+  with the project's id). With strict project filter only
+  the 1 project-scoped row qualifies
+- **API smoke:**
+  - `GET /maintenance/runs?projectId=<id>&limit=3` returned
+    `{ data: [drift-agent record] }` — confirms the server
+    envelope (not `{ runs: [...] }`)
+  - `POST /maintenance/trigger` with valid body returned 200 +
+    the completed MaintenanceRunRecord (status='completed',
+    duration ~1 s, project_id populated)
+  - `POST /maintenance/trigger` with missing projectId
+    returned 400 with `{"error":"projectId is required"}` —
+    the dashboard's catch block will surface this verbatim
+- **Browser drive (headless Chrome):**
+  - `/app/maintenance` renders the four "Scheduled agents"
+    cards each with a `run now` button. Recent runs section
+    initially shows 4 rows (3 prior drift-agent triggers + 1
+    alignment-agent with "6 intents queued" tag) — the empty
+    state is GONE
+  - Clicked `run now` on the drift-agent card → button text
+    transitioned to `triggering...` → re-enabled after ~1 s →
+    a fresh drift-agent row appeared in Recent runs at
+    10:23:29 PM (the new row joined the list, total now 4
+    visible)
+  - Screenshot captured. The "Scheduled agents" section shows
+    drift-agent mid-trigger (`triggering...` button still
+    rendered when the screenshot fired). The 4 recent-runs
+    rows all show green ● dots, agent role, optional intent-
+    queued tag, and HH:MM timestamp
+  - `docker-compose logs server | grep -iE "(maintenance|trigger).*error|error.*(maintenance|trigger)"`
+    returned no matches — the trigger fired cleanly with no
+    server-side warnings or errors
+
+Decisions made:
+- **`listMaintenanceRuns` aligned to `{ data: ... }` (server's
+  convention), not the server changed to `{ runs, total }`.**
+  Every other route in the server uses `{ data: ... }` (intents
+  list, projects list, alerts list, deployments, executions).
+  Aligning the one outlier to the convention was clearly
+  cheaper than introducing a divergence
+- **Strict project filter, no inclusion of `project_id IS NULL`
+  cron rows.** The brief says "show runs from the currently
+  selected project". Cron-scheduled evaluation runs have NULL
+  project_id by design (they're global, not per-project), and
+  including them would clutter the per-project view with rows
+  the operator didn't trigger and that don't pertain to their
+  specific project. The dashboard surface is the operator's
+  per-project lens; the global cron history is observable via
+  the existing `GET /maintenance/runs` without a projectId
+  filter (CLI / curl / dashboard-future-feature). Logged a
+  follow-up so the next iteration of the Maintenance view
+  could surface a "show all" toggle if operators ask for it
+- **1 s reload after trigger** (brief's value), with the SSE
+  event as a backstop. The runner is in-process so the row
+  exists immediately when the HTTP response lands; the
+  `setTimeout` is a defensive belt against the SSE bus being
+  briefly slow. Could be dropped to 0 in principle — kept as a
+  small margin
+- **Per-agent error map**, not a single error string. If the
+  operator clicks `run now` on two agents in quick succession
+  and the first fails, then the second succeeds, a single
+  error string would either show stale data after the second
+  call or get cleared by the success — both bad. Keyed by
+  agentRole, each row owns its own visibility
+- **Auto-clear guard: don't overwrite a newer error.** The
+  5 s `setTimeout` reads the error message at schedule time
+  and only clears if the current state still matches. A
+  retry-during-clear cycle keeps the newer message visible
+  for its own 5 s window
+- **No change to the server route or repo query.** The
+  permissive `WHERE TRUE / AND project_id = ...` SQL in
+  `maintenance-runs.ts` is already correct; the only bug was
+  the dashboard's response-envelope mistype. Repo + route
+  untouched
+
+Build status: `pnpm -r build` clean. Server image rebuilt;
+Maintenance view fully functional end-to-end against real
+data on `trackeros`. Bug 1 (trigger button + error UX), Bug 2
+(Recent runs always empty), Bug 3 (post-trigger refresh
+timing) all resolved.
+
+Follow-up logged:
+- A "show all" / "scope: this project" toggle in the
+  Maintenance view would let operators see the global
+  cron-scheduled evaluation-agent rows alongside their
+  per-project runs. Today the per-project filter strictly
+  excludes `project_id IS NULL` runs (which is the right
+  default per the brief); the global view is reachable only
+  via `GET /maintenance/runs` without a projectId arg, which
+  the dashboard doesn't currently call
+

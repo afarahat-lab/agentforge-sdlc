@@ -14,7 +14,7 @@ content is derived._
 
 ## Current state (keep this section current)
 
-**Last updated:** 2026-05-31 (Claude Code — shared parseJsonb helper; three repo-local parsers retired)
+**Last updated:** 2026-05-31 (Claude Code — Maintenance view: Recent Runs populated, Run now error UX)
 
 **Repo:** https://github.com/afarahat-lab/gestalt
 
@@ -315,7 +315,15 @@ content is derived._
     projectId }` (requireRole operator); same runner code path as the
     cron schedules
   - `GET /maintenance/runs?projectId&agentRole&limit` returns
-    `MaintenanceRunRecord[]`
+    `{ data: MaintenanceRunRecord[] }` (the standard server envelope).
+    The dashboard's `Maintenance.tsx` view consumes it and renders the
+    "Recent runs" list — clicking the `run now` button against any of
+    the four agents triggers the run via `POST /maintenance/trigger`,
+    the runner persists the row synchronously (in-process — no BullMQ
+    hop), and the view re-fetches after 1 s plus on the
+    `maintenance.run-completed` SSE event. Trigger errors render as a
+    red `✗ Failed to trigger: <message>` strip under the agent card
+    and auto-clear after 5 s
   - Live verification against `trackeros`: all 4 agents triggered;
     alignment-agent produced 5 findings → 5 maintenance intents
     queued (all carrying `[gestalt-maintenance/CONTEXT_ALIGNMENT]`
@@ -609,238 +617,6 @@ content is derived._
 
 ## Recent session log entries (last 3 from SESSION_LOG.md)
 
-### Session 2026-05-31 — Claude Code (agent execution logs + IntentDetail accordion)
-
-Closes the "what did this agent actually see and say?" gap. Before
-this session, the dashboard's IntentDetail listed each agent run by
-role + duration + status — no way to see the prompt that was sent
-to the LLM, the response that came back, the artifacts that were
-produced, or the error message on failure. Now every agent run
-persists a log row containing all four; clicking any row in the
-dashboard expands an inline accordion with copy + show-full
-controls.
-
-Changed:
-- `packages/adapters/postgres/src/migrations/007_execution_logs.sql`
-  (new): `agent_execution_logs` table — `execution_id` FK with
-  `ON DELETE CASCADE`, `correlation_id`, `agent_role`,
-  nullable `prompt` + `llm_response` (non-LLM agents leave
-  them null), `result_status` text, `artifact_paths TEXT[]`,
-  `signal_types TEXT[]`, nullable `error_message`,
-  `created_at`. Two indexes (`execution_id`, `correlation_id`).
-  No schema_migrations writes — runner owns that
-- `packages/core/src/repository/index.ts`: new
-  `AgentExecutionLogRecord` + `AgentExecutionLogRepository`
-  (`save / findByExecutionId / findByCorrelationId`). Added
-  `findById` to `AgentExecutionRepository` so the
-  `/executions/:id/log` endpoint can fetch the row directly.
-  `RepositoryRegistry` gained `executionLogs`. Re-exported from
-  `@gestalt/core`
-- `packages/adapters/postgres/src/repositories/execution-logs.ts`
-  (new): `PostgresAgentExecutionLogRepository`. Maps
-  postgres-style `TEXT[]` → JS array directly; defends against
-  `null` arrays by normalising to `[]` on read
-- `packages/adapters/postgres/src/repositories/executions.ts`:
-  added the new `findById(id)` query (`SELECT * ... LIMIT 1`)
-- `packages/adapters/oracle/src/repositories/execution-logs.ts`
-  + `packages/adapters/mssql/src/repositories/execution-logs.ts`
-  (new): full throw-stub `*AgentExecutionLogRepository` so
-  interface drift forces a build break here
-- Adapter `index.ts` files updated to wire / re-export the new
-  classes
-- `packages/agents/generate/src/types.ts`: `AgentResult` gained
-  optional `lastPrompt?: string` and `llmResponse?: string`
-- All six generate agents updated to capture the most-recent
-  prompt + LLM response into local vars and propagate them on
-  every return path (success, retry-failure, clarification-needed,
-  hard-failed):
-  - `intent-agent.ts` — captures lastPrompt + lastLlmResponse
-    before each `llmCall(prompt)`; threads them into all four
-    exits (completed, clarification-needed, retries-exhausted,
-    thrown failure)
-  - `design-agent.ts` — same pattern. `failedResult` helper
-    widened to accept the two new fields
-  - `context-agent.ts`, `code-agent.ts`, `test-agent.ts` — same
-    capture+propagate pattern
-  - `lint-config-agent.ts` — unchanged. Never calls the LLM; both
-    fields stay undefined → orchestrator persists them as null
-- `packages/agents/quality-gate/src/types.ts`: `GateAgentResult`
-  gained the same optional `lastPrompt` + `llmResponse`
-- `packages/agents/quality-gate/src/agents/llm-review-agent.ts`:
-  threads both fields onto every return path (passed, failed,
-  errored). `constraint-agent.ts` is unchanged — regex sweeper,
-  no LLM call, the orchestrator persists nulls
-- `packages/agents/generate/src/orchestrator/orchestrator.ts`:
-  destructures `executionLogs` from `getRepositories()` inside
-  the step loop. After `executions.updateStatus(...)`,
-  `await executionLogs.save(...)` with the result's
-  prompt/response/status, mapped artifact paths, mapped signal
-  types, and error message (first signal's message on
-  `failed`). Wrapped in `.catch()` so a log-save failure logs a
-  warning and does not break the cycle. The thrown-agent catch
-  branch also persists a row with null prompt/response,
-  `resultStatus: 'failed'`, and the error message
-- `packages/agents/quality-gate/src/orchestrator/gate-orchestrator.ts`:
-  same persistence pattern inside `runWithObservability`. Both
-  branches (thrown + completed) save a row. `artifactPaths`
-  always empty (gate agents don't produce generate-style
-  artifacts); `signalTypes` from `result.signals`
-- `packages/agents/deploy/src/orchestrator/deploy-orchestrator.ts`:
-  same. Deploy agents are non-LLM so prompt + response are
-  always null. `artifactPaths` always empty; `signalTypes`
-  reflects whatever the agent emitted
-- `packages/server/src/routes/executions.ts` (new):
-  `GET /executions/:id/log` (preHandler `requireRole('viewer')`).
-  Fetches the execution row, finds the matching log,
-  parallel-loads the artifacts + signals for the
-  correlation, filters them down to
-  `producedBy === agentRole` /
-  `sourceAgent === agentRole`. Returns 404 if the execution
-  doesn't exist; returns 200 with `log: null` for pre-007
-  executions so the UI can render a placeholder without
-  distinguishing "intent missing" from "feature didn't exist
-  yet"
-- `packages/server/src/app.ts`: registers the new routes
-- `packages/dashboard/src/api/client.ts`: new
-  `getExecutionLog(executionId)` typed method. Pulls
-  `SignalSummary` into the import block (it was missing
-  before this change)
-- `packages/dashboard/src/views/IntentDetail.tsx`: rewrote
-  the agent timeline as a clickable accordion. State holds
-  the expanded set, a `logs` cache keyed by execution id,
-  and per-execution show-full toggles for prompt and
-  response. Click handler lazy-loads the log on first open
-  (`'loading'` state shown inline), caches the result.
-  Subsequent toggles use cached data. Prompt + LLM response
-  are truncated to 400 chars by default with a "show
-  full" button and a "copy" button (writes to clipboard via
-  `navigator.clipboard.writeText`). Null prompts render as
-  "— Not applicable (non-LLM agent)". The error box pinned
-  at the top of the panel shows the agent's error message
-  in red when present. Panel uses existing CSS variables;
-  multiple executions can be expanded at once for
-  side-by-side comparison
-
-Verified live against `trackeros`:
-- `pnpm -r build` clean across all 12 packages
-- Server image rebuilt; migration 007 applied
-  (`schema_migrations` now lists seven versions). Table shape
-  confirmed via `\d agent_execution_logs`
-- **Submitted intent** "Add a titleCase utility under
-  src/shared/utils/title-case ..." (correlationId
-  `9c28d399-d160-4534-ab3e-64ee142ae5b8`). Intent reached
-  `deployed` in ~17 s
-- **12 agent_executions → 12 agent_execution_logs** (1:1)
-- Full join query confirms the column shapes:
-  - LLM agents have populated `prompt` + `llm_response`:
-    - intent-agent: prompt 2818 / response 822, 1 artifact
-    - design-agent: 1939 / 83, 1 artifact
-    - context-agent: 1300 / 31
-    - code-agent: 3243 / 426, 2 artifacts
-      (`src/shared/utils/title-case/titleCase.ts`,
-      `index.ts`)
-    - test-agent: 1300 / 1654, 1 artifact
-    - review-agent: 3469 / 266
-  - Non-LLM agents have NULL prompt + NULL response, with
-    the right resultStatus:
-    - lint-config-agent: skipped (correctly recorded — the
-      agent never called the LLM)
-    - constraint-agent: passed
-    - pr-agent / pipeline-agent / promotion-agent ×2: all
-      `completed`, all nulls
-  - No `error_message` populated anywhere — the cycle ran
-    clean
-- `GET /executions/<code-agent-id>/log` returned the full
-  payload (3.2 KB prompt, the JSON response with the two
-  generated files, the two artifacts with their content,
-  empty signals list). Same call for the constraint-agent
-  execution returned the expected `prompt: null,
-  llmResponse: null, resultStatus: 'passed'`
-- **Browser drive (headless Chrome via CDP):** logged in as
-  `a@b.c`, navigated to `/app/intents/<intentId>`. All 12
-  execution rows render in the timeline with statuses + role
-  names + durations + ▼ chevrons. Clicked the code-agent row
-  → accordion expanded inline, showed the Agent meta panel
-  (Role: code-agent, Status: ● done, Duration: 1163ms,
-  Started: 8:20:03 PM), the Prompt section with `copy` +
-  `show full` buttons and "(2843 more chars)" truncation
-  marker, the LLM Response section with the same controls,
-  and the Artifacts/Signals sections. Screenshot captured.
-  Clicked the constraint-agent row → expanded panel showed
-  "Not applicable" placeholders for prompt and response;
-  result status "passed" (13 "Not applicable" text matches
-  in the DOM confirms the placeholders are everywhere they
-  should be — Prompt + LLM Response × multiple expanded
-  panels)
-
-Decisions made:
-- **One log row per agent_executions row, not a log stream.**
-  Incremental progress already flows through the in-process
-  event bus + SSE. The table captures the post-completion
-  snapshot for the dashboard's drill-down view. A log-stream
-  surface would balloon row counts and complicate the
-  retention story without giving the dashboard anything new
-- **`ON DELETE CASCADE` on the FK.** Matches the existing
-  BullMQ removeOnComplete contract: if an execution row is
-  pruned, its log goes with it. The audit trail of "agent X
-  ran for intent Y" lives on `agent_executions`; the log
-  table is the rich-text companion, not the canonical
-  record
-- **404 vs `log: null` for missing rows.** Returning 200
-  with `log: null` lets the dashboard render a clean
-  placeholder for pre-migration-007 executions without
-  having to distinguish "the execution doesn't exist" from
-  "the execution exists but its log was never captured".
-  404 is reserved for "no execution by that id at all"
-- **`TEXT[]` for artifactPaths + signalTypes, not JSONB.**
-  Both are simple list-of-strings; the postgres array type
-  preserves the array semantics directly and indexes
-  naturally if a future query wants `WHERE 'CONSTRAINT_VIOLATION' = ANY(signal_types)`.
-  JSONB would have worked but is overkill
-- **Persist on log-save failures as warnings, not throws.**
-  A DB blip on `executionLogs.save` should not break the
-  cycle. The row's primary state (agent_executions,
-  signals, artifacts) is already persisted; the log row is
-  diagnostic. Caught + logged at `warn`
-- **Prompt + response stored as TEXT, not JSONB.** They are
-  free-form strings that the LLM produced; treating them
-  as text avoids the parse-on-write cost and matches the
-  diagnostic intent (operator wants to read them as-is)
-- **GP-006 compliance:** prompt + response are stored in
-  the DB but NOT echoed to the audit log. The audit row for
-  `intent.clarification-provided` (added in the previous
-  clarification session) already records only
-  `clarificationLength`; this session does not touch that
-  contract. The new `agent_execution_logs.prompt` /
-  `llm_response` are operator-visible via the dashboard's
-  IntentDetail accordion, which requires authentication +
-  `requireRole('viewer')`
-- **Per-execution log fetch is lazy + cached** in the
-  dashboard. Opening the IntentDetail with 12 executions
-  fires zero `/executions/:id/log` calls until the operator
-  clicks something; clicking the same row twice in a row
-  uses the cached payload
-- **Truncate at 400 chars.** Picked to keep the panel
-  scannable in a typical browser viewport. Both prompt and
-  response can be 3+ KB on a non-trivial agent, which would
-  push the rest of the page off-screen. The full text is
-  always one click away via "show full"
-- **Inline accordion, not a modal**, per the brief. Lets
-  the operator have multiple executions expanded at once
-  for cross-checking (e.g. comparing the design-agent
-  prompt against what the code-agent saw)
-
-Build status: `pnpm -r build` clean across all 12 packages.
-Migration 007 applied. End-to-end verified: prompts +
-responses + artifact paths + signal types persist for every
-agent run; the dashboard reads them back and renders the
-accordion panel with copy + show-full controls.
-
-No follow-ups added — this feature is self-contained and
-GP-006-compliant by design.
-
----
-
 ### Session 2026-05-31 — Claude Code (richer ActiveAgents + Deployments + JSONB metadata fix)
 
 Both views had everything they needed in the database already; this
@@ -1102,4 +878,158 @@ No follow-ups. The shared helper is the canonical answer for
 the next JSONB column; the per-row `::jsonb` cast on the WRITE
 path remains the matching write-side defence (see the
 maintenance-runs and alerts repos).
+
+---
+
+### Session 2026-05-31 — Claude Code (Maintenance view: Recent Runs populated + Run now error UX)
+
+Two adjacent dashboard bugs in the Maintenance view, both rooted
+in a single response-envelope mismatch and a small UX gap.
+
+Investigation (the brief asked for it explicitly):
+- `GET /maintenance/runs` returned `{ data: MaintenanceRunRecord[] }`
+  on the server (matching every other route's envelope), but the
+  dashboard's `DashboardApiClient.listMaintenanceRuns` was typed
+  as `Promise<{ runs, total }>`. The view read `res.runs ?? []`
+  which was permanently `undefined → []`. Recent runs section
+  was always empty — not because runs didn't exist (they did:
+  8 cron-driven evaluation-agent rows, 1 prior manually-
+  triggered drift-agent) but because the dashboard's parse was
+  for a phantom key
+- The "Run now" button itself worked — server returned 200 with
+  the completed `MaintenanceRunRecord` synchronously (the
+  runner is in-process, not BullMQ). The actual gap was that
+  `handleTrigger` used `try/finally` without `try/catch`, so
+  any rejection from the API call would surface as an
+  unhandled promise rejection from an event handler and the
+  operator would see nothing
+- The SSE subscription to `maintenance.run-completed` and the
+  post-trigger `setTimeout(load)` were both already wired in
+  the prior implementation. The brief asked to drop the delay
+  from 2 s to 1 s
+
+Changed:
+- `packages/dashboard/src/api/client.ts`:
+  - `listMaintenanceRuns` return type fixed to
+    `{ data: MaintenanceRunSummary[] }` — matches the actual
+    server envelope. JSDoc explains the prior bug so the next
+    edit doesn't regress
+  - `triggerMaintenanceAgent` return type fixed to
+    `{ data: MaintenanceRunSummary }` — the server returns the
+    completed run record. Comment notes the runner is
+    in-process so the row exists by the time the response lands
+- `packages/dashboard/src/views/Maintenance.tsx`:
+  - `load` reads `res.data ?? []` instead of `res.runs ?? []`
+  - new `triggerErrors: Record<string, string>` state, keyed by
+    agentRole (so an in-flight retry on one agent doesn't blow
+    away another agent's lingering error)
+  - `handleTrigger` rewrapped as `try/catch/finally`. On
+    catch: sets the error, schedules a 5 s auto-clear with a
+    guard that doesn't clobber a newer error from a retry. On
+    success: 1 s delayed `load()` (brief's value) — covers the
+    SSE event path with a backstop and shaves a second off
+    the prior 2 s
+  - red `✗ Failed to trigger: <message>` strip renders under the
+    agent card when `triggerErrors[agent]` is populated. Styled
+    with `var(--red)` on a translucent red background using
+    existing CSS variables only
+  - empty-state hint updated: "Agents run on their configured
+    schedule or via 'run now' above"
+
+Verified live against `trackeros`:
+- `pnpm --filter @gestalt/dashboard build` clean; full
+  workspace build clean
+- Server image rebuilt
+- **Database state before fix:** 8 maintenance_runs rows
+  (7 cron-scheduled evaluation-agent runs with
+  `project_id = NULL`; 1 prior manually-triggered drift-agent
+  with the project's id). With strict project filter only
+  the 1 project-scoped row qualifies
+- **API smoke:**
+  - `GET /maintenance/runs?projectId=<id>&limit=3` returned
+    `{ data: [drift-agent record] }` — confirms the server
+    envelope (not `{ runs: [...] }`)
+  - `POST /maintenance/trigger` with valid body returned 200 +
+    the completed MaintenanceRunRecord (status='completed',
+    duration ~1 s, project_id populated)
+  - `POST /maintenance/trigger` with missing projectId
+    returned 400 with `{"error":"projectId is required"}` —
+    the dashboard's catch block will surface this verbatim
+- **Browser drive (headless Chrome):**
+  - `/app/maintenance` renders the four "Scheduled agents"
+    cards each with a `run now` button. Recent runs section
+    initially shows 4 rows (3 prior drift-agent triggers + 1
+    alignment-agent with "6 intents queued" tag) — the empty
+    state is GONE
+  - Clicked `run now` on the drift-agent card → button text
+    transitioned to `triggering...` → re-enabled after ~1 s →
+    a fresh drift-agent row appeared in Recent runs at
+    10:23:29 PM (the new row joined the list, total now 4
+    visible)
+  - Screenshot captured. The "Scheduled agents" section shows
+    drift-agent mid-trigger (`triggering...` button still
+    rendered when the screenshot fired). The 4 recent-runs
+    rows all show green ● dots, agent role, optional intent-
+    queued tag, and HH:MM timestamp
+  - `docker-compose logs server | grep -iE "(maintenance|trigger).*error|error.*(maintenance|trigger)"`
+    returned no matches — the trigger fired cleanly with no
+    server-side warnings or errors
+
+Decisions made:
+- **`listMaintenanceRuns` aligned to `{ data: ... }` (server's
+  convention), not the server changed to `{ runs, total }`.**
+  Every other route in the server uses `{ data: ... }` (intents
+  list, projects list, alerts list, deployments, executions).
+  Aligning the one outlier to the convention was clearly
+  cheaper than introducing a divergence
+- **Strict project filter, no inclusion of `project_id IS NULL`
+  cron rows.** The brief says "show runs from the currently
+  selected project". Cron-scheduled evaluation runs have NULL
+  project_id by design (they're global, not per-project), and
+  including them would clutter the per-project view with rows
+  the operator didn't trigger and that don't pertain to their
+  specific project. The dashboard surface is the operator's
+  per-project lens; the global cron history is observable via
+  the existing `GET /maintenance/runs` without a projectId
+  filter (CLI / curl / dashboard-future-feature). Logged a
+  follow-up so the next iteration of the Maintenance view
+  could surface a "show all" toggle if operators ask for it
+- **1 s reload after trigger** (brief's value), with the SSE
+  event as a backstop. The runner is in-process so the row
+  exists immediately when the HTTP response lands; the
+  `setTimeout` is a defensive belt against the SSE bus being
+  briefly slow. Could be dropped to 0 in principle — kept as a
+  small margin
+- **Per-agent error map**, not a single error string. If the
+  operator clicks `run now` on two agents in quick succession
+  and the first fails, then the second succeeds, a single
+  error string would either show stale data after the second
+  call or get cleared by the success — both bad. Keyed by
+  agentRole, each row owns its own visibility
+- **Auto-clear guard: don't overwrite a newer error.** The
+  5 s `setTimeout` reads the error message at schedule time
+  and only clears if the current state still matches. A
+  retry-during-clear cycle keeps the newer message visible
+  for its own 5 s window
+- **No change to the server route or repo query.** The
+  permissive `WHERE TRUE / AND project_id = ...` SQL in
+  `maintenance-runs.ts` is already correct; the only bug was
+  the dashboard's response-envelope mistype. Repo + route
+  untouched
+
+Build status: `pnpm -r build` clean. Server image rebuilt;
+Maintenance view fully functional end-to-end against real
+data on `trackeros`. Bug 1 (trigger button + error UX), Bug 2
+(Recent runs always empty), Bug 3 (post-trigger refresh
+timing) all resolved.
+
+Follow-up logged:
+- A "show all" / "scope: this project" toggle in the
+  Maintenance view would let operators see the global
+  cron-scheduled evaluation-agent rows alongside their
+  per-project runs. Today the per-project filter strictly
+  excludes `project_id IS NULL` runs (which is the right
+  default per the brief); the global view is reachable only
+  via `GET /maintenance/runs` without a projectId arg, which
+  the dashboard doesn't currently call
 

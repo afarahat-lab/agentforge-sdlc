@@ -130,20 +130,31 @@ export class DashboardApiClient {
 
   // ─── Maintenance ───────────────────────────────────────────────────────────
 
+  /**
+   * GET /maintenance/runs returns the same `{ data: ... }` envelope
+   * every other server route uses. Previously typed as
+   * `{ runs, total }` which silently mapped to `undefined` and made
+   * the Maintenance view's "Recent runs" list permanently empty.
+   */
   async listMaintenanceRuns(params?: {
     projectId?: string;
     agentRole?: string;
     limit?: number;
-  }): Promise<{ runs: MaintenanceRunSummary[]; total: number }> {
+  }): Promise<{ data: MaintenanceRunSummary[] }> {
     return this.get('/maintenance/runs', params);
   }
 
   /**
    * `projectId` is REQUIRED by the server (a maintenance trigger always
-   * runs against a specific project). The signature is widened to take
-   * it so the dashboard can pass it through from the project context.
+   * runs against a specific project). Returns the completed
+   * `MaintenanceRunRecord` synchronously — the runner is in-process,
+   * so by the time the HTTP response lands the row is already in the
+   * DB and a subsequent `listMaintenanceRuns` will pick it up.
    */
-  async triggerMaintenanceAgent(agentRole: string, projectId: string): Promise<{ queued: true }> {
+  async triggerMaintenanceAgent(
+    agentRole: string,
+    projectId: string,
+  ): Promise<{ data: MaintenanceRunSummary }> {
     return this.post('/maintenance/trigger', { agentRole, projectId });
   }
 

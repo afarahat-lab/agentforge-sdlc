@@ -8,7 +8,7 @@ the historical record of how the state evolved._
 
 ## Current state (keep this section current)
 
-**Last updated:** 2026-05-31 (Claude Code — shared parseJsonb helper; three repo-local parsers retired)
+**Last updated:** 2026-05-31 (Claude Code — Maintenance view: Recent Runs populated, Run now error UX)
 
 **Repo:** https://github.com/afarahat-lab/gestalt
 
@@ -309,7 +309,15 @@ the historical record of how the state evolved._
     projectId }` (requireRole operator); same runner code path as the
     cron schedules
   - `GET /maintenance/runs?projectId&agentRole&limit` returns
-    `MaintenanceRunRecord[]`
+    `{ data: MaintenanceRunRecord[] }` (the standard server envelope).
+    The dashboard's `Maintenance.tsx` view consumes it and renders the
+    "Recent runs" list — clicking the `run now` button against any of
+    the four agents triggers the run via `POST /maintenance/trigger`,
+    the runner persists the row synchronously (in-process — no BullMQ
+    hop), and the view re-fetches after 1 s plus on the
+    `maintenance.run-completed` SSE event. Trigger errors render as a
+    red `✗ Failed to trigger: <message>` strip under the agent card
+    and auto-clear after 5 s
   - Live verification against `trackeros`: all 4 agents triggered;
     alignment-agent produced 5 findings → 5 maintenance intents
     queued (all carrying `[gestalt-maintenance/CONTEXT_ALIGNMENT]`
