@@ -395,6 +395,13 @@ export interface FindingAttemptRepository extends BaseRepository {
   getAttempts(projectId: string, findingHashes: string[]): Promise<FindingAttemptRecord[]>;
   markEscalated(projectId: string, findingHash: string): Promise<void>;
   resetAttempts(projectId: string, findingHash: string): Promise<void>;
+  /**
+   * Operator-triggered full reset for a project. Deletes EVERY attempt
+   * row — escalated or not. Used after manual remediation (e.g., the
+   * operator cleaned up the file and wants future runs to start fresh).
+   * Returns the number of rows deleted.
+   */
+  resetAll(projectId: string): Promise<number>;
 }
 
 // ─── Deployment event repository (ADR-033) ────────────────────────────────────

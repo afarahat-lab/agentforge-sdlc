@@ -19,4 +19,5 @@ export class MssqlFindingAttemptRepository implements FindingAttemptRepository {
   async getAttempts(_projectId: string, _findingHashes: string[]): Promise<FindingAttemptRecord[]> { return notImplemented(); }
   async markEscalated(_projectId: string, _findingHash: string): Promise<void> { return notImplemented(); }
   async resetAttempts(_projectId: string, _findingHash: string): Promise<void> { return notImplemented(); }
+  async resetAll(_projectId: string): Promise<number> { return notImplemented(); }
 }

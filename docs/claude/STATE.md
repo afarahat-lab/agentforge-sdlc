@@ -8,7 +8,7 @@ the historical record of how the state evolved._
 
 ## Current state (keep this section current)
 
-**Last updated:** 2026-06-01 (Claude Code — alignment-agent extractor fix + idempotency budget)
+**Last updated:** 2026-06-01 (Claude Code — alignment-agent module tree-block extractor + CLI maintenance commands)
 
 **Repo:** https://github.com/afarahat-lab/gestalt
 
@@ -312,7 +312,54 @@ the historical record of how the state evolved._
     entity definition); `golden-principle-not-cross-referenced` →
     `AGENTS.md` (add the principle reference). The companion file
     sits in `affectedFiles[1]` as read-only context the LLM sees in
-    the suggestedAction text
+    the suggestedAction text. `extractModules()` runs **two
+    patterns** against ARCHITECTURE.md:
+    1. **Pattern 1 — literal path.** A contiguous
+       `src/modules/<name>` substring anywhere in the file. This
+       is the format the `suggestedAction` text now instructs the
+       LLM to write (`Add the line "  src/modules/X/    — X
+       module" … Use the literal path format, not a tree diagram
+       child entry`)
+    2. **Pattern 2 — markdown directory tree.** Lines like
+       `├── modules/` introduce a 10-line lookahead that captures
+       indented children (`│   ├── X/`). A structural depth check
+       (count of `│` chars in the leading tree prefix) ensures
+       only DEEPER-indented entries count as children — sibling
+       top-level entries like `├── shared/` correctly break the
+       scan instead of being misread as `modules/` children.
+       Without that check, the runner produced 5 spurious
+       `architecture-module-without-entity` findings for
+       `shared/db/auth/utils/api` and the LLM happily added
+       garbage entities to DOMAIN.md
+    The two patterns together let the harness template's existing
+    tree-format ARCHITECTURE.md be recognised AS-IS while still
+    rewarding the more explicit literal-path format the
+    `suggestedAction` requests. Comment-stripping (`# …`) is
+    applied to both the container-line detection and the child
+    regex match so `├── modules/   # business domain modules`
+    matches the same as the bare `├── modules/`. Convergence
+    verified live: from a clean DOMAIN.md the alignment loop
+    reaches `findings: 0, directFixes: 0, durationMs: ~1.6 s`
+    after the LLM's literal-path fixes land
+  - **CLI access via `gestalt maintenance`.** Operators can
+    trigger and reset from the terminal:
+    - `gestalt maintenance trigger <agentRole> <projectName>` —
+      thin wrapper around `POST /maintenance/trigger`. Same
+      runner code path as the cron schedule + the dashboard
+      "Run now" button; prints `runId` + `intentsQueued` +
+      `directFixes` + `durationMs` from the returned record
+    - `gestalt maintenance reset-findings <projectName>` —
+      `DELETE /maintenance/findings/:projectId`
+      (`requireRole('operator')`). Clears every
+      `maintenance_finding_attempts` row for the project
+      regardless of `escalated` flag — the "I cleaned up the
+      files manually, give me a fresh budget" button. Returns
+      `{ deleted: N }`. **Audit row is `action:
+      'maintenance.findings-reset'` with metadata `projectName`
+      + `deletedCount` + `ip` ONLY — finding hashes are derived
+      from finding content (which may include file paths) and
+      so are excluded per GP-006**. Both subcommands accept the
+      standard `--server <url>` one-shot override
   - **gc-agent** (weekly Fri 04:00 UTC) — deletes remote `gestalt/*`
     branches older than 30 days, `.gestalt/*` spec files older than 90
     days (committed deletion), and `deployment_events` rows older than
@@ -708,18 +755,6 @@ the historical record of how the state evolved._
   tests via `vitest`). Each needs the project's deps installed in the
   cloned tree — likely a `pnpm install --frozen-lockfile` step before
   the agents run, with the install output cached
-- **alignment-agent module extractor assumes literal `src/modules/<name>`
-  references in ARCHITECTURE.md.** Fixed entity extractor + idempotency
-  guard ship in this update, but the module side still matches a
-  contiguous `src/modules/<name>` string. ARCHITECTURE.md commonly
-  uses a markdown directory tree (`├── modules/` / `│   └──
-  <Name>/`) where the parent path is implied by indentation. The
-  LLM's idiomatic edits don't satisfy the regex; the idempotency
-  guard catches the loop after 3 attempts and escalates as
-  designed. Long-term: teach the extractor to follow markdown
-  directory-tree structure OR change the suggestedAction text to
-  ask the LLM for a literal `src/modules/<name>/ — description`
-  line outside the tree block
 - **Live Prometheus / Datadog adapters not yet exercised.** Built
   against the published REST API shapes; unit-tested smoke would
   require a monitoring system. NoOp adapter is the verified path

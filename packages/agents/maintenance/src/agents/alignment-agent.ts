@@ -58,13 +58,24 @@ export async function runAlignmentAgent(input: MaintenanceAgentInput): Promise<M
     const modulesWithoutEntities = moduleNames.filter((m) => !entityKeys.has(m.toLowerCase()));
 
     for (const entity of entitiesWithoutModules) {
+      // Single instruction — see `instruction` below — used for both
+      // the human-readable finding and the LLM-facing intent. The
+      // "literal path format, not a tree diagram" wording is
+      // load-bearing: without it, the LLM tends to add an indented
+      // tree-child line like `│   └── X/` instead of the
+      // `src/modules/X/` substring the extractor's Pattern 1 matches.
+      // Pattern 2 catches the tree-child fallback, but Pattern 1 keeps
+      // the file authoritative.
+      const instruction =
+        `Add the line "  src/modules/${entity}/    — ${entity} module" ` +
+        `to the module listing in docs/ARCHITECTURE.md. ` +
+        `Use the literal path format, not a tree diagram child entry.`;
       findings.push({
         type: 'domain-entity-without-module',
         description: `entity '${entity}' is declared in DOMAIN.md but has no matching src/modules entry in ARCHITECTURE.md`,
         affectedFiles: ['docs/ARCHITECTURE.md', 'docs/DOMAIN.md'],
         severity: 'medium',
-        suggestedAction:
-          `Add a src/modules/${entity}/ entry to docs/ARCHITECTURE.md to match the '${entity}' entity defined in docs/DOMAIN.md.`,
+        suggestedAction: instruction,
       });
       intentsQueued.push({
         type: 'CONTEXT_ALIGNMENT',
@@ -76,10 +87,7 @@ export async function runAlignmentAgent(input: MaintenanceAgentInput): Promise<M
         // slot 1 as context (the fixer does not write to it).
         affectedFiles: ['docs/ARCHITECTURE.md', 'docs/DOMAIN.md'],
         evidence: `entity '${entity}' in DOMAIN.md has no matching architecture module`,
-        suggestedAction: maintenanceIntentText(
-          'CONTEXT_ALIGNMENT',
-          `Add a src/modules/${entity}/ entry to docs/ARCHITECTURE.md to match the '${entity}' entity defined in docs/DOMAIN.md.`,
-        ),
+        suggestedAction: maintenanceIntentText('CONTEXT_ALIGNMENT', instruction),
       });
     }
     for (const moduleName of modulesWithoutEntities) {
@@ -198,13 +206,38 @@ function extractEntities(domainMd: string): string[] {
   return entities;
 }
 
+/**
+ * Module extractor — recognises BOTH formats authors actually use in
+ * ARCHITECTURE.md:
+ *
+ *   Pattern 1 — literal path (preferred):
+ *     `src/modules/<name>` or `src/modules/<name>/` substring anywhere
+ *     in the file. Stable, unambiguous, the format suggestedAction
+ *     instructs the LLM to write.
+ *
+ *   Pattern 2 — markdown directory tree (the format the harness
+ *     template ships with):
+ *       ```
+ *       src/
+ *       ├── modules/          # business domain modules
+ *       │   ├── WelcomeScreen/
+ *       │   └── StartButton/
+ *       ```
+ *     For each line that introduces a `modules/` container, scan up to
+ *     the next 10 lines for indented tree-child entries. Hard cap on
+ *     the lookahead so we never run away on a giant ARCHITECTURE.md.
+ *
+ * Comment stripping (`# ...` at end of a line) is applied to both the
+ * container-line detection and the child-line match — the trackeros
+ * harness template puts `# business domain modules — own their data
+ * and routes` after `├── modules/`, which would otherwise break both
+ * regexes.
+ */
 function extractModules(architectureMd: string): string[] {
   const modules: string[] = [];
   const seen = new Set<string>();
 
-  // Accepts kebab-case, snake_case, and CamelCase. Trailing slash is
-  // optional — matches both `src/modules/leave/` (with slash) and
-  // `src/modules/leave` (e.g. inside `## src/modules/leave module`).
+  // Pattern 1 — literal `src/modules/<name>` substring.
   for (const m of architectureMd.matchAll(/src\/modules\/([a-zA-Z0-9_-]+)\/?/g)) {
     const name = m[1];
     if (name && !seen.has(name)) {
@@ -213,7 +246,62 @@ function extractModules(architectureMd: string): string[] {
     }
   }
 
+  // Pattern 2 — `modules/` container line + up-to-10-line tree-child
+  // scan. The 10-line cap is the brief's hard limit; do not expand it.
+  const lines = architectureMd.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i] ?? '';
+    if (!isModulesContainerLine(rawLine)) continue;
+    // Real children of `modules/` are indented one tree-level deeper.
+    // The number of `│` characters in the prefix is a robust depth
+    // proxy: parent at depth N has N `│` chars, children at depth N+1
+    // have N+1. Without this check a sibling top-level entry like
+    // `├── shared/` would be misread as a child of the modules subtree
+    // and the runner would happily commit a 'shared' entity to
+    // DOMAIN.md to "reconcile" the false-positive module.
+    const parentDepth = countLeadingPipes(rawLine);
+    for (let j = i + 1; j < Math.min(i + 11, lines.length); j++) {
+      const childRaw = lines[j] ?? '';
+      const childTrimmed = childRaw.trim();
+      // Empty lines are part of the tree spacing — keep scanning.
+      // Anything starting with an alphabetical char, `#` (heading), or
+      // `-` / `*` (horizontal rule / bullet list) is a section break.
+      if (childTrimmed !== '' && /^[a-zA-Z#\-*]/.test(childTrimmed)) break;
+      // If the line has tree decorations at our parent's depth or
+      // shallower, we've reached a sibling — the modules/ subtree is
+      // over.
+      if (childTrimmed !== '' && countLeadingPipes(childRaw) <= parentDepth) break;
+      const codeOnly = stripLineComment(childRaw);
+      const childMatch = codeOnly.match(/[├└│─\s]+([a-zA-Z][a-zA-Z0-9_-]*)\/?(?:\s*[—–-].*)?$/);
+      const name = childMatch?.[1];
+      if (name && !seen.has(name)) {
+        modules.push(name);
+        seen.add(name);
+      }
+    }
+  }
+
   return modules;
+}
+
+function isModulesContainerLine(line: string): boolean {
+  const codeOnly = stripLineComment(line);
+  return /\bmodules\/?\s*$/.test(codeOnly) || /\bmodules\/\s*[─│├└]/.test(codeOnly);
+}
+
+function countLeadingPipes(line: string): number {
+  const match = line.match(/^([\s│├└─]*)/);
+  const prefix = match?.[1] ?? '';
+  return (prefix.match(/│/g) ?? []).length;
+}
+
+function stripLineComment(line: string): string {
+  // Splits on the first `#` and keeps the leading portion. Markdown
+  // ATX headings start with `#` at column 0 (no leading whitespace);
+  // we treat `#` anywhere else as a code-block comment.
+  const hashIdx = line.indexOf('#');
+  if (hashIdx <= 0) return line.trimEnd();
+  return line.slice(0, hashIdx).trimEnd();
 }
 
 function extractPrincipleIds(principlesMd: string): string[] {

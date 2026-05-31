@@ -96,4 +96,21 @@ export class PostgresFindingAttemptRepository implements FindingAttemptRepositor
          AND finding_hash = ${findingHash}
     `;
   }
+
+  async resetAll(projectId: string): Promise<number> {
+    // Operator-triggered full reset — see the interface JSDoc. Uses the
+    // WITH ... RETURNING 1 / SELECT COUNT trick (same as
+    // `deployment-events.gcOlderThan`) because postgres.js doesn't
+    // surface affected-row counts on naked DELETE statements.
+    const db = getDb();
+    const rows = await db<{ count: string }[]>`
+      WITH deleted AS (
+        DELETE FROM maintenance_finding_attempts
+        WHERE project_id = ${projectId}
+        RETURNING 1
+      )
+      SELECT COUNT(*)::text AS count FROM deleted
+    `;
+    return parseInt(rows[0]?.count ?? '0', 10);
+  }
 }

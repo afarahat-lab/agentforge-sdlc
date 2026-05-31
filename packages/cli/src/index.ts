@@ -38,6 +38,9 @@ import { logsCommand, dashboardCommand } from './commands/logs';
 import {
   configShowCommand, configSetServerCommand, configResetCommand,
 } from './commands/config';
+import {
+  maintenanceTriggerCommand, maintenanceResetFindingsCommand,
+} from './commands/maintenance';
 
 const pkg = { version: '0.1.0' };  // replaced by package.json at build time
 
@@ -127,6 +130,27 @@ projects
   .option('--server <url>', 'Server URL (one-shot override for this invocation)')
   .action(async (name: string, adapter: string, opts: { server?: string }) => {
     await setAdapterCommand(name, adapter, { server: opts.server }).catch(fatalError);
+  });
+
+// gestalt maintenance
+const maintenance = program
+  .command('maintenance')
+  .description('Operator commands for the maintenance layer (drift / alignment / gc / evaluation)');
+
+maintenance
+  .command('trigger <agentRole> <projectName>')
+  .description('Run a maintenance agent now (CLI shortcut for the dashboard "run now" button)')
+  .option('--server <url>', 'Server URL (one-shot override for this invocation)')
+  .action(async (agentRole: string, projectName: string, opts: { server?: string }) => {
+    await maintenanceTriggerCommand(agentRole, projectName, { server: opts.server }).catch(fatalError);
+  });
+
+maintenance
+  .command('reset-findings <projectName>')
+  .description('Clear maintenance_finding_attempts for a project — escalated rows included. Use after manual remediation.')
+  .option('--server <url>', 'Server URL (one-shot override for this invocation)')
+  .action(async (projectName: string, opts: { server?: string }) => {
+    await maintenanceResetFindingsCommand(projectName, { server: opts.server }).catch(fatalError);
   });
 
 // gestalt run

@@ -176,6 +176,19 @@ export class GestaltApiClient {
     return this.get('/status/agents');
   }
 
+  // ─── Maintenance ───────────────────────────────────────────────────────────
+
+  async triggerMaintenance(
+    agentRole: string,
+    projectId: string,
+  ): Promise<{ data: { id: string; agentRole: string; status: string; intentsQueued: number; directFixes: number; durationMs: number | null } }> {
+    return this.post('/maintenance/trigger', { agentRole, projectId });
+  }
+
+  async resetMaintenanceFindings(projectId: string): Promise<{ data: { deleted: number } }> {
+    return this.delete(`/maintenance/findings/${projectId}`);
+  }
+
   // ─── SSE stream ────────────────────────────────────────────────────────────
 
   /**
@@ -222,6 +235,15 @@ export class GestaltApiClient {
       method: 'POST',
       headers: { ...this.authHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new ApiClientError(res.status, await res.text());
+    return res.json() as Promise<T>;
+  }
+
+  private async delete<T = unknown>(path: string): Promise<T> {
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method: 'DELETE',
+      headers: this.authHeaders(),
     });
     if (!res.ok) throw new ApiClientError(res.status, await res.text());
     return res.json() as Promise<T>;

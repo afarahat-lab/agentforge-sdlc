@@ -92,4 +92,52 @@ export async function registerMaintenanceRoutes(app: FastifyInstance): Promise<v
       return reply.send({ data: record });
     },
   );
+
+  // Operator-only full reset of a project's finding-attempt rows.
+  // Intentionally deletes ALL attempts (escalated or not) — this is the
+  // "I cleaned up the files manually, give me a fresh budget" button.
+  // The audit row carries the project id + reset count but NOT the
+  // finding hashes themselves (GP-006: hashes are derived from finding
+  // content which may include file paths).
+  app.delete<{ Params: { projectId: string } }>(
+    '/maintenance/findings/:projectId',
+    { preHandler: requireRole('operator') },
+    async (request, reply) => {
+      const { projectId } = request.params;
+      if (!projectId?.trim()) {
+        return reply.code(400).send({ error: 'projectId is required' });
+      }
+
+      const { projects, findingAttempts, audit } = getRepositories();
+      const project = await projects.findById(projectId);
+      if (!project) {
+        return reply.code(404).send({ error: 'Project not found' });
+      }
+
+      const deleted = await findingAttempts.resetAll(projectId);
+
+      log.info(
+        { projectId, deleted, actor: request.user?.id },
+        'Maintenance finding attempts reset',
+      );
+
+      // GP-006 — the audit record carries the project + the count, not
+      // the deleted finding hashes (hashes are derived from finding
+      // content which may include file paths).
+      await audit.append({
+        actor: request.user?.id ?? 'unknown',
+        action: 'maintenance.findings-reset',
+        entityType: 'project',
+        entityId: projectId,
+        correlationId: projectId,
+        metadata: {
+          projectName: project.name,
+          deletedCount: deleted,
+          ip: request.ip,
+        },
+      });
+
+      return reply.send({ data: { deleted } });
+    },
+  );
 }
