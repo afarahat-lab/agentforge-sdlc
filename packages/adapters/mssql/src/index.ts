@@ -6,5 +6,6 @@ export { MssqlIntentRepository } from './repositories/intents';
 export { MssqlProjectRepository } from './repositories/projects';
 export { MssqlDeploymentEventRepository } from './repositories/deployment-events';
 export { MssqlMaintenanceRunRepository } from './repositories/maintenance-runs';
+export { MssqlFindingAttemptRepository } from './repositories/finding-attempts';
 export { MssqlAlertRepository } from './repositories/alerts';
 export { MssqlAgentExecutionLogRepository } from './repositories/execution-logs';

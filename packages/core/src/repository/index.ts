@@ -251,6 +251,7 @@ export interface RepositoryRegistry {
   projects: ProjectRepository;
   deploymentEvents: DeploymentEventRepository;
   maintenanceRuns: MaintenanceRunRepository;
+  findingAttempts: FindingAttemptRepository;
   alerts: AlertRepository;
   executionLogs: AgentExecutionLogRepository;
 }
@@ -273,13 +274,15 @@ export interface RepositoryRegistry {
 export type AlertType =
   | 'clarification-needed'
   | 'GOLDEN_PRINCIPLE_BREACH'
-  | 'promotion-pending';
+  | 'promotion-pending'
+  | 'maintenance-stuck';
 
 export type AlertRequiredAction =
   | 'provide-clarification'
   | 'acknowledge-breach'
   | 'approve-promotion'
-  | 'reject-promotion';
+  | 'reject-promotion'
+  | 'review-manually';
 
 export interface AlertRecord {
   id: string;
@@ -355,6 +358,43 @@ export interface MaintenanceRunRepository extends BaseRepository {
     agentRole?: string;
     limit: number;
   }): Promise<MaintenanceRunRecord[]>;
+}
+
+// ─── Finding attempt repository (ADR-018 idempotency guard) ──────────────────
+
+/**
+ * Per-finding attempt counter for the maintenance layer. Persisted in
+ * `maintenance_finding_attempts` (migration 008). Used by the runner to
+ * avoid looping forever on a finding the context-fixer cannot resolve.
+ *
+ * `findingHash` is a SHA-256 of `${intent.type}:${affectedFiles[0]}:
+ * ${evidence.slice(0,80)}` — see `computeFindingHash` in
+ * packages/agents/maintenance/src/runner/index.ts.
+ *
+ * Workflow:
+ *  - on each direct-fix attempt, the runner calls `upsertAttempt`
+ *    (increments by 1 or inserts at 1)
+ *  - on a real fix (`committed: true` from context-fixer), the runner
+ *    calls `resetAttempts` so the next occurrence starts fresh
+ *  - once `attemptCount >= MAX_ATTEMPTS`, the runner creates a
+ *    `maintenance-stuck` alert and calls `markEscalated`; subsequent
+ *    runs skip the finding silently until an operator resets it
+ */
+export interface FindingAttemptRecord {
+  id: string;
+  projectId: string;
+  findingHash: string;
+  attemptCount: number;
+  lastAttempted: Date;
+  escalated: boolean;
+  createdAt: Date;
+}
+
+export interface FindingAttemptRepository extends BaseRepository {
+  upsertAttempt(projectId: string, findingHash: string): Promise<FindingAttemptRecord>;
+  getAttempts(projectId: string, findingHashes: string[]): Promise<FindingAttemptRecord[]>;
+  markEscalated(projectId: string, findingHash: string): Promise<void>;
+  resetAttempts(projectId: string, findingHash: string): Promise<void>;
 }
 
 // ─── Deployment event repository (ADR-033) ────────────────────────────────────

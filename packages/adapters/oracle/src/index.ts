@@ -6,5 +6,6 @@ export { OracleIntentRepository } from './repositories/intents';
 export { OracleProjectRepository } from './repositories/projects';
 export { OracleDeploymentEventRepository } from './repositories/deployment-events';
 export { OracleMaintenanceRunRepository } from './repositories/maintenance-runs';
+export { OracleFindingAttemptRepository } from './repositories/finding-attempts';
 export { OracleAlertRepository } from './repositories/alerts';
 export { OracleAgentExecutionLogRepository } from './repositories/execution-logs';

@@ -18,6 +18,7 @@
  * manual `POST /maintenance/trigger` endpoint.
  */
 
+import { createHash, randomUUID } from 'crypto';
 import {
   createContextLogger, dispatch, emitLiveEvent, getRepositories,
 } from '@gestalt/core';
@@ -30,6 +31,181 @@ import type {
 } from '../types';
 import { classifyMaintenanceIntent } from '../types';
 import { applyContextFileFix } from '../agents/context-fixer';
+
+/**
+ * Max consecutive direct-fix attempts on the same finding before the
+ * runner escalates to a `maintenance-stuck` alert. Each context-fixer
+ * success resets the counter; each non-committed outcome (no-change,
+ * truncation-guard, llm-error, file-missing) AND each thrown failure
+ * counts as an attempt.
+ *
+ * Set deliberately low — three is enough to absorb a transient LLM
+ * hiccup without letting a structurally-unfixable finding loop forever.
+ */
+const MAX_ATTEMPTS = 3;
+
+/**
+ * Stable identity for a recurring finding across runs. Built from the
+ * intent's type, write-target file, and an 80-char evidence prefix so
+ * minor LLM-paraphrasing of the suggestedAction doesn't change the
+ * hash. SHA-256 hex; ~64 chars on disk.
+ */
+function computeFindingHash(intent: MaintenanceIntent): string {
+  const target = intent.affectedFiles[0] ?? '';
+  const evidencePrefix = intent.evidence.slice(0, 80);
+  return createHash('sha256')
+    .update(`${intent.type}:${target}:${evidencePrefix}`)
+    .digest('hex');
+}
+
+/**
+ * Idempotency-guarded direct-fix execution. Returns
+ * `{ committed: true }` on a real fix; the caller increments the run
+ * counter on that signal. All bookkeeping (skipping escalated findings,
+ * upserting attempt counts, creating `maintenance-stuck` alerts) lives
+ * here so the main loop stays readable.
+ */
+async function runDirectFix(args: {
+  intent: MaintenanceIntent;
+  project: MaintenanceAgentInput;
+  allFindings: MaintenanceRunRecord['findings'];
+}): Promise<{ committed: boolean }> {
+  const { intent, project, allFindings } = args;
+  const { findingAttempts } = getRepositories();
+  const hash = computeFindingHash(intent);
+
+  // Check the prior-attempt history BEFORE doing any work.
+  const [prior] = await findingAttempts.getAttempts(project.projectId, [hash]);
+
+  if (prior?.escalated) {
+    // Already raised to a human — silently skip until an operator
+    // resets the attempt or resolves the underlying issue.
+    log.info(
+      { projectId: project.projectId, findingHash: hash.slice(0, 12), intentType: intent.type },
+      'Direct fix skipped — finding already escalated',
+    );
+    return { committed: false };
+  }
+
+  try {
+    const outcome = await applyContextFileFix(intent, project);
+    if (outcome.committed) {
+      // Real edit shipped — clear the attempt row so the next time the
+      // SAME finding fires (if it ever does), it starts at attempt 1.
+      await findingAttempts.resetAttempts(project.projectId, hash);
+      allFindings.push({
+        type: 'direct-fix-applied',
+        description: `Direct ${intent.type} fix committed to ${intent.affectedFiles[0]} (${outcome.commitSha?.slice(0, 8)})`,
+        affectedFiles: [intent.affectedFiles[0] ?? ''],
+        severity: 'low',
+        suggestedAction: 'Pull defaultBranch to receive the change.',
+      });
+      return { committed: true };
+    }
+    // No-change / truncation-guard / llm-error / file-missing — count
+    // as an attempt so we don't loop forever on a hopeless finding.
+    const updated = await findingAttempts.upsertAttempt(project.projectId, hash);
+    await maybeEscalate({
+      hash, intent, project, allFindings, attemptCount: updated.attemptCount, reason: outcome.reason ?? 'no-change',
+    });
+    return { committed: false };
+  } catch (fixErr) {
+    // Thrown failures count as attempts too; the path guard's explicit
+    // throw (e.g. for a src/ target) is the only "infinite" case but
+    // structurally never repeats because we only ever feed it allowed
+    // paths.
+    const updated = await findingAttempts.upsertAttempt(project.projectId, hash);
+    log.error(
+      {
+        err: fixErr,
+        projectId: project.projectId,
+        intentType: intent.type,
+        affectedFile: intent.affectedFiles[0],
+        attemptCount: updated.attemptCount,
+      },
+      'Direct context fix failed',
+    );
+    allFindings.push({
+      type: 'direct-fix-failed',
+      description: `Direct ${intent.type} fix failed for ${intent.affectedFiles[0]}: ${fixErr instanceof Error ? fixErr.message : String(fixErr)}`,
+      affectedFiles: [intent.affectedFiles[0] ?? ''],
+      severity: 'high',
+      suggestedAction: 'Check server logs for the full error and apply the fix manually.',
+    });
+    await maybeEscalate({
+      hash, intent, project, allFindings, attemptCount: updated.attemptCount, reason: 'thrown',
+    });
+    return { committed: false };
+  }
+}
+
+/**
+ * Called after every NON-committed attempt with the *post-upsert* count.
+ * Escalates when we've spent the budget on the same finding — alert is
+ * created on the run where the budget ran out, not on the run after.
+ */
+async function maybeEscalate(args: {
+  hash: string;
+  intent: MaintenanceIntent;
+  project: MaintenanceAgentInput;
+  allFindings: MaintenanceRunRecord['findings'];
+  attemptCount: number;
+  reason: string;
+}): Promise<void> {
+  const { hash, intent, project, allFindings, attemptCount, reason } = args;
+  if (attemptCount < MAX_ATTEMPTS) {
+    log.info(
+      {
+        projectId: project.projectId,
+        findingHash: hash.slice(0, 12),
+        intentType: intent.type,
+        reason,
+        attemptCount,
+      },
+      'Direct fix skipped — attempt counted',
+    );
+    return;
+  }
+  const { findingAttempts, alerts } = getRepositories();
+  await findingAttempts.markEscalated(project.projectId, hash);
+  await alerts.create({
+    correlationId: randomUUID(),
+    intentId: null,
+    type: 'maintenance-stuck',
+    severity: 'medium',
+    title: `Maintenance agent cannot resolve finding (${intent.type})`,
+    description:
+      `The direct-fix path has attempted to address this finding ${attemptCount} times ` +
+      `without success and is now escalating for manual review. ` +
+      `Evidence: ${intent.evidence}`,
+    requiredAction: 'review-manually',
+    context: {
+      projectId: project.projectId,
+      intentType: intent.type,
+      affectedFiles: intent.affectedFiles,
+      evidence: intent.evidence,
+      suggestedAction: intent.suggestedAction,
+      attemptCount,
+      findingHash: hash,
+    },
+  });
+  allFindings.push({
+    type: 'direct-fix-escalated',
+    description: `Direct fix budget exhausted (${attemptCount} attempts) — escalated to maintenance-stuck alert. ${intent.evidence}`,
+    affectedFiles: [intent.affectedFiles[0] ?? ''],
+    severity: 'medium',
+    suggestedAction: 'Resolve manually and clear the attempts row, or acknowledge the alert.',
+  });
+  log.warn(
+    {
+      projectId: project.projectId,
+      findingHash: hash.slice(0, 12),
+      intentType: intent.type,
+      attemptCount,
+    },
+    'Direct fix budget exhausted — escalated',
+  );
+}
 
 export interface RunInput {
   agentRole: string;
@@ -79,44 +255,13 @@ export async function runMaintenanceAgent(input: RunInput): Promise<MaintenanceR
         // (in-process, no generate loop). Code-change intents continue
         // to flow through the generate orchestrator.
         if (classifyMaintenanceIntent(intent.type) === 'context-file-update') {
-          try {
-            const outcome = await applyContextFileFix(intent, project);
-            if (outcome.committed) {
-              totalDirectFixes += 1;
-              allFindings.push({
-                type: 'direct-fix-applied',
-                description: `Direct ${intent.type} fix committed to ${intent.affectedFiles[0]} (${outcome.commitSha?.slice(0, 8)})`,
-                affectedFiles: [intent.affectedFiles[0] ?? ''],
-                severity: 'low',
-                suggestedAction: 'Pull defaultBranch to receive the change.',
-              });
-            } else {
-              log.info(
-                {
-                  projectId: project.projectId,
-                  intentType: intent.type,
-                  reason: outcome.reason,
-                },
-                'Direct fix skipped',
-              );
-            }
-          } catch (fixErr) {
-            log.error(
-              {
-                err: fixErr,
-                projectId: project.projectId,
-                intentType: intent.type,
-                affectedFile: intent.affectedFiles[0],
-              },
-              'Direct context fix failed',
-            );
-            allFindings.push({
-              type: 'direct-fix-failed',
-              description: `Direct ${intent.type} fix failed for ${intent.affectedFiles[0]}: ${fixErr instanceof Error ? fixErr.message : String(fixErr)}`,
-              affectedFiles: [intent.affectedFiles[0] ?? ''],
-              severity: 'high',
-              suggestedAction: 'Check server logs for the full error and apply the fix manually.',
-            });
+          const handled = await runDirectFix({
+            intent,
+            project,
+            allFindings,
+          });
+          if (handled.committed) {
+            totalDirectFixes += 1;
           }
         } else {
           await dispatchMaintenanceIntent(intent, input.queueConfig);

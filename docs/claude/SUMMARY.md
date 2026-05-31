@@ -14,7 +14,7 @@ content is derived._
 
 ## Current state (keep this section current)
 
-**Last updated:** 2026-05-31 (Claude Code — context-file maintenance intents take the direct-fix path)
+**Last updated:** 2026-06-01 (Claude Code — alignment-agent extractor fix + idempotency budget)
 
 **Repo:** https://github.com/afarahat-lab/gestalt
 
@@ -28,9 +28,10 @@ content is derived._
   are summarised in the "Session log" entries dated 2026-05-29 / 30
 - All 12 buildable workspace packages compile clean (`pnpm -r build`)
 - `docker-compose up -d` succeeds — server, postgres, redis all `Up (healthy)`
-- All seven migrations apply on startup: `001_initial`, `002_local_auth`,
+- All eight migrations apply on startup: `001_initial`, `002_local_auth`,
   `003_projects`, `004_deployments`, `005_maintenance`,
-  `006_intent_clarification`, `007_execution_logs`
+  `006_intent_clarification`, `007_execution_logs`,
+  `008_finding_attempts`
 - Server reachable on http://localhost:3000 — `/health` returns 200
 - Auth middleware active — protected routes return 401
 - **Dashboard SPA reachable in the browser, deep-linkable, no path
@@ -300,7 +301,24 @@ content is derived._
     GP-NNN cross-references in AGENTS.md; queues `CONTEXT_ALIGNMENT`
     intents per misalignment. Same routing — the runner sends them
     through the context-fixer rather than the generate loop because
-    the test-agent can't generate tests for a markdown edit
+    the test-agent can't generate tests for a markdown edit.
+    `extractEntities()` matches **h3** entity headings (`### Name`) and
+    bullet-style entity definitions (`- **Name** — …`, with a dash
+    separator), filtered through a stop list of common field labels
+    (`Type`, `Description`, `Status`, `Notes`, `Props`, …). The h2
+    pattern + bold-bullet-without-separator pattern were the source
+    of the previous false-positive findings on `Components` /
+    `Type` / `Description` / `Props` (where `## Components` is a
+    grouping heading and `- **Type**: value` is a field label on
+    `WelcomeScreen`). For each finding type, `affectedFiles[0]` is
+    the file the context-fixer should **write** to:
+    `domain-entity-without-module` → `docs/ARCHITECTURE.md` (add a
+    `src/modules/<EntityName>/` entry);
+    `architecture-module-without-entity` → `docs/DOMAIN.md` (add an
+    entity definition); `golden-principle-not-cross-referenced` →
+    `AGENTS.md` (add the principle reference). The companion file
+    sits in `affectedFiles[1]` as read-only context the LLM sees in
+    the suggestedAction text
   - **gc-agent** (weekly Fri 04:00 UTC) — deletes remote `gestalt/*`
     branches older than 30 days, `.gestalt/*` spec files older than 90
     days (committed deletion), and `deployment_events` rows older than
@@ -354,6 +372,33 @@ content is derived._
       applied 4 more fixes for the entity findings (the GP-NNN
       findings were resolved by the first run's AGENTS.md edits
       and so were absent the second time)
+  - **Per-finding idempotency guard (migration 008).** The runner
+    hashes each candidate fix (`SHA-256` of
+    `intent.type:affectedFiles[0]:evidence.slice(0,80)`) and tracks
+    consecutive failed attempts in `maintenance_finding_attempts`.
+    Each non-committed outcome (no-change, truncation-guard,
+    llm-error, file-missing, thrown) increments the per-finding
+    counter via an `INSERT ... ON CONFLICT ... DO UPDATE` upsert. A
+    real commit calls `resetAttempts(hash)` (delete the row) so the
+    next occurrence starts fresh. Once the counter hits
+    `MAX_ATTEMPTS = 3` on the same run that just incremented it,
+    the runner creates a `maintenance-stuck` alert
+    (`severity: medium`, `requiredAction: review-manually`, JSONB
+    `context` carrying `intentType` / `affectedFiles` / `evidence` /
+    `suggestedAction` / `attemptCount` / `findingHash`) and flips
+    `escalated = TRUE`. Future runs of the same finding see the
+    flag and skip silently (~838 ms total run, no clone, no LLM
+    call). New `AlertType: 'maintenance-stuck'` +
+    `AlertRequiredAction: 'review-manually'` added to the core
+    repository typed unions. The context-fixer's system prompt was
+    tightened to forbid `> Note:` blockquote-appending and to
+    return the file unchanged when no real structural edit is
+    possible — this was the LLM's escape hatch on unresolvable
+    findings and caused DOMAIN.md to grow linearly with garbage
+    blockquotes. Live verified on `trackeros`: a finding the LLM
+    can't satisfy produces 3 attempts → escalation on the 3rd run
+    (alert created, no commit) → silent skip on the 4th and
+    subsequent runs
   - Manual operator trigger via `POST /maintenance/trigger { agentRole,
     projectId }` (requireRole operator); same runner code path as the
     cron schedules
@@ -565,6 +610,15 @@ content is derived._
   the shared `parseJsonb<MaintenanceFinding[]>(row.findings, [])` in
   `../utils` normalises the read path against postgres.js returning
   either a parsed array or a raw JSON string
+- `findingAttempts` — upsertAttempt (INSERT ... ON CONFLICT ... DO
+  UPDATE so concurrent runs increment atomically without a read-
+  modify-write race), getAttempts (filter by projectId + IN-list of
+  hashes — empty input short-circuits to `[]`), markEscalated
+  (UPDATE escalated=TRUE), resetAttempts (DELETE so a fresh
+  occurrence starts at attempt 1). Migration 008.
+  `UNIQUE(project_id, finding_hash)` gives the upsert path a
+  deterministic conflict target. ON DELETE CASCADE on
+  `projects(id)` keeps the table clean when a project is removed
 - `alerts` — create, findById, findUnacknowledged, findByCorrelationId,
   acknowledge. `intent_id` lives in `context` JSONB (schema 001
   predates the FK); the shared
@@ -660,12 +714,18 @@ content is derived._
   tests via `vitest`). Each needs the project's deps installed in the
   cloned tree — likely a `pnpm install --frozen-lockfile` step before
   the agents run, with the install output cached
-- **alignment-agent entity extractor is too loose.** Matches every
-  `## Word` and `- **Word**` line in DOMAIN.md as an entity, including
-  template headings like "Description" / "Status" — produces false
-  positives like "entity 'description' has no module" intents. Tighten
-  the regex to require capitalised-PascalCase + skip a known stop list
-  (Description, Status, Notes, etc.)
+- **alignment-agent module extractor assumes literal `src/modules/<name>`
+  references in ARCHITECTURE.md.** Fixed entity extractor + idempotency
+  guard ship in this update, but the module side still matches a
+  contiguous `src/modules/<name>` string. ARCHITECTURE.md commonly
+  uses a markdown directory tree (`├── modules/` / `│   └──
+  <Name>/`) where the parent path is implied by indentation. The
+  LLM's idiomatic edits don't satisfy the regex; the idempotency
+  guard catches the loop after 3 attempts and escalates as
+  designed. Long-term: teach the extractor to follow markdown
+  directory-tree structure OR change the suggestedAction text to
+  ask the LLM for a literal `src/modules/<name>/ — description`
+  line outside the tree block
 - **Live Prometheus / Datadog adapters not yet exercised.** Built
   against the published REST API shapes; unit-tested smoke would
   require a monitoring system. NoOp adapter is the verified path
@@ -679,160 +739,6 @@ content is derived._
 ---
 
 ## Recent session log entries (last 3 from SESSION_LOG.md)
-
-### Session 2026-05-31 — Claude Code (Maintenance view: Recent Runs populated + Run now error UX)
-
-Two adjacent dashboard bugs in the Maintenance view, both rooted
-in a single response-envelope mismatch and a small UX gap.
-
-Investigation (the brief asked for it explicitly):
-- `GET /maintenance/runs` returned `{ data: MaintenanceRunRecord[] }`
-  on the server (matching every other route's envelope), but the
-  dashboard's `DashboardApiClient.listMaintenanceRuns` was typed
-  as `Promise<{ runs, total }>`. The view read `res.runs ?? []`
-  which was permanently `undefined → []`. Recent runs section
-  was always empty — not because runs didn't exist (they did:
-  8 cron-driven evaluation-agent rows, 1 prior manually-
-  triggered drift-agent) but because the dashboard's parse was
-  for a phantom key
-- The "Run now" button itself worked — server returned 200 with
-  the completed `MaintenanceRunRecord` synchronously (the
-  runner is in-process, not BullMQ). The actual gap was that
-  `handleTrigger` used `try/finally` without `try/catch`, so
-  any rejection from the API call would surface as an
-  unhandled promise rejection from an event handler and the
-  operator would see nothing
-- The SSE subscription to `maintenance.run-completed` and the
-  post-trigger `setTimeout(load)` were both already wired in
-  the prior implementation. The brief asked to drop the delay
-  from 2 s to 1 s
-
-Changed:
-- `packages/dashboard/src/api/client.ts`:
-  - `listMaintenanceRuns` return type fixed to
-    `{ data: MaintenanceRunSummary[] }` — matches the actual
-    server envelope. JSDoc explains the prior bug so the next
-    edit doesn't regress
-  - `triggerMaintenanceAgent` return type fixed to
-    `{ data: MaintenanceRunSummary }` — the server returns the
-    completed run record. Comment notes the runner is
-    in-process so the row exists by the time the response lands
-- `packages/dashboard/src/views/Maintenance.tsx`:
-  - `load` reads `res.data ?? []` instead of `res.runs ?? []`
-  - new `triggerErrors: Record<string, string>` state, keyed by
-    agentRole (so an in-flight retry on one agent doesn't blow
-    away another agent's lingering error)
-  - `handleTrigger` rewrapped as `try/catch/finally`. On
-    catch: sets the error, schedules a 5 s auto-clear with a
-    guard that doesn't clobber a newer error from a retry. On
-    success: 1 s delayed `load()` (brief's value) — covers the
-    SSE event path with a backstop and shaves a second off
-    the prior 2 s
-  - red `✗ Failed to trigger: <message>` strip renders under the
-    agent card when `triggerErrors[agent]` is populated. Styled
-    with `var(--red)` on a translucent red background using
-    existing CSS variables only
-  - empty-state hint updated: "Agents run on their configured
-    schedule or via 'run now' above"
-
-Verified live against `trackeros`:
-- `pnpm --filter @gestalt/dashboard build` clean; full
-  workspace build clean
-- Server image rebuilt
-- **Database state before fix:** 8 maintenance_runs rows
-  (7 cron-scheduled evaluation-agent runs with
-  `project_id = NULL`; 1 prior manually-triggered drift-agent
-  with the project's id). With strict project filter only
-  the 1 project-scoped row qualifies
-- **API smoke:**
-  - `GET /maintenance/runs?projectId=<id>&limit=3` returned
-    `{ data: [drift-agent record] }` — confirms the server
-    envelope (not `{ runs: [...] }`)
-  - `POST /maintenance/trigger` with valid body returned 200 +
-    the completed MaintenanceRunRecord (status='completed',
-    duration ~1 s, project_id populated)
-  - `POST /maintenance/trigger` with missing projectId
-    returned 400 with `{"error":"projectId is required"}` —
-    the dashboard's catch block will surface this verbatim
-- **Browser drive (headless Chrome):**
-  - `/app/maintenance` renders the four "Scheduled agents"
-    cards each with a `run now` button. Recent runs section
-    initially shows 4 rows (3 prior drift-agent triggers + 1
-    alignment-agent with "6 intents queued" tag) — the empty
-    state is GONE
-  - Clicked `run now` on the drift-agent card → button text
-    transitioned to `triggering...` → re-enabled after ~1 s →
-    a fresh drift-agent row appeared in Recent runs at
-    10:23:29 PM (the new row joined the list, total now 4
-    visible)
-  - Screenshot captured. The "Scheduled agents" section shows
-    drift-agent mid-trigger (`triggering...` button still
-    rendered when the screenshot fired). The 4 recent-runs
-    rows all show green ● dots, agent role, optional intent-
-    queued tag, and HH:MM timestamp
-  - `docker-compose logs server | grep -iE "(maintenance|trigger).*error|error.*(maintenance|trigger)"`
-    returned no matches — the trigger fired cleanly with no
-    server-side warnings or errors
-
-Decisions made:
-- **`listMaintenanceRuns` aligned to `{ data: ... }` (server's
-  convention), not the server changed to `{ runs, total }`.**
-  Every other route in the server uses `{ data: ... }` (intents
-  list, projects list, alerts list, deployments, executions).
-  Aligning the one outlier to the convention was clearly
-  cheaper than introducing a divergence
-- **Strict project filter, no inclusion of `project_id IS NULL`
-  cron rows.** The brief says "show runs from the currently
-  selected project". Cron-scheduled evaluation runs have NULL
-  project_id by design (they're global, not per-project), and
-  including them would clutter the per-project view with rows
-  the operator didn't trigger and that don't pertain to their
-  specific project. The dashboard surface is the operator's
-  per-project lens; the global cron history is observable via
-  the existing `GET /maintenance/runs` without a projectId
-  filter (CLI / curl / dashboard-future-feature). Logged a
-  follow-up so the next iteration of the Maintenance view
-  could surface a "show all" toggle if operators ask for it
-- **1 s reload after trigger** (brief's value), with the SSE
-  event as a backstop. The runner is in-process so the row
-  exists immediately when the HTTP response lands; the
-  `setTimeout` is a defensive belt against the SSE bus being
-  briefly slow. Could be dropped to 0 in principle — kept as a
-  small margin
-- **Per-agent error map**, not a single error string. If the
-  operator clicks `run now` on two agents in quick succession
-  and the first fails, then the second succeeds, a single
-  error string would either show stale data after the second
-  call or get cleared by the success — both bad. Keyed by
-  agentRole, each row owns its own visibility
-- **Auto-clear guard: don't overwrite a newer error.** The
-  5 s `setTimeout` reads the error message at schedule time
-  and only clears if the current state still matches. A
-  retry-during-clear cycle keeps the newer message visible
-  for its own 5 s window
-- **No change to the server route or repo query.** The
-  permissive `WHERE TRUE / AND project_id = ...` SQL in
-  `maintenance-runs.ts` is already correct; the only bug was
-  the dashboard's response-envelope mistype. Repo + route
-  untouched
-
-Build status: `pnpm -r build` clean. Server image rebuilt;
-Maintenance view fully functional end-to-end against real
-data on `trackeros`. Bug 1 (trigger button + error UX), Bug 2
-(Recent runs always empty), Bug 3 (post-trigger refresh
-timing) all resolved.
-
-Follow-up logged:
-- A "show all" / "scope: this project" toggle in the
-  Maintenance view would let operators see the global
-  cron-scheduled evaluation-agent rows alongside their
-  per-project runs. Today the per-project filter strictly
-  excludes `project_id IS NULL` runs (which is the right
-  default per the brief); the global view is reachable only
-  via `GET /maintenance/runs` without a projectId arg, which
-  the dashboard doesn't currently call
-
----
 
 ### Session 2026-05-31 — Claude Code (Maintenance run detail — expandable findings)
 
@@ -1203,4 +1109,298 @@ routing fix is correct independently.
 
 No new follow-ups added — feature is self-contained and lives
 behind the existing ADR-018 / classification surface.
+
+---
+
+### Session 2026-06-01 — Claude Code (alignment-agent extractor fix + idempotency budget)
+
+The prior session shipped the direct-fix routing for context-file
+maintenance intents, but live operation against `trackeros` revealed
+a non-converging loop: every alignment-agent run reported 8 findings
+and applied 4 fixes — same findings, every run, forever. Root-cause
+analysis (the previous Claude Code reply to the operator) traced the
+divergence to two interacting bugs (over-greedy entity extractor +
+the fix targeting the wrong file) and one missing safety mechanism
+(no per-finding budget). This session implements the architect's
+fix order A → B → C → E.
+
+Changed:
+- `packages/agents/maintenance/src/agents/alignment-agent.ts`:
+  - **Fix A — entity extractor.** Replaced the old patterns
+    (`/^##\s+([A-Z]…)/` h2 headings + `/^[-*]\s+\*\*([A-Z]…)\*\*/`
+    bold-bullet anywhere) with:
+    - `/^###\s+([A-Z][A-Za-z0-9]+)\s*$/gm` — h3 only, since h2 is
+      conventionally a section grouping (e.g. `## Components`)
+      while h3 is the entity declaration (e.g. `### WelcomeScreen`)
+    - `/^[-*]\s+\*\*([A-Z][A-Za-z0-9]+)\*\*\s*[—–-]/gm` — bold bullet
+      only when followed by an em-dash / en-dash / hyphen separator
+      (the entity-definition pattern). `- **Type**: value` (field
+      label, colon follows the closing `**`) no longer matches
+    - A `FIELD_LABEL_STOP_LIST` of common attribute names
+      (`Type`, `Description`, `Status`, `Notes`, `Props`, `Id`,
+      `Name`, `Fields`, `Relationships`, `Methods`, `Properties`,
+      `Attributes`, `Example`, `Usage`, `Parameters`, `Returns`,
+      `Throws`, `See`) filters both match sites. Documented as
+      "minimal — adding too many words masks real entities"
+  - `extractModules()` updated to a wider character class
+    (`[a-zA-Z0-9_-]+`) so CamelCase + snake_case + kebab-case all
+    match. The regex still requires a literal `src/modules/<name>`
+    string; the implication that the LLM's idiomatic markdown
+    directory tree can't satisfy it is captured under Pending
+    enhancements
+  - **Fix B — affectedFiles ordering.** Three intent branches
+    rebalanced so `affectedFiles[0]` is now the file the
+    context-fixer should WRITE to (the slot it already keys off):
+    - `domain-entity-without-module` →
+      `[docs/ARCHITECTURE.md, docs/DOMAIN.md]` (add a module
+      reference). Was inverted; this was the primary reason the
+      LLM couldn't resolve the finding — it was being told to
+      edit the file the entity already lived in
+    - `architecture-module-without-entity` →
+      `[docs/DOMAIN.md, docs/ARCHITECTURE.md]`. Already correct
+      but the order is now explicit
+    - `golden-principle-not-cross-referenced` →
+      `[AGENTS.md, docs/GOLDEN_PRINCIPLES.md]`. Already correct
+    - The corresponding `suggestedAction` text was rewritten so
+      the LLM gets a single concrete instruction (e.g. "Add a
+      `src/modules/StartButton/` entry to docs/ARCHITECTURE.md
+      to match the 'StartButton' entity defined in docs/DOMAIN.md")
+      rather than the old "either…or…" dilemma that gave the LLM
+      cover to do nothing structural
+- `packages/agents/maintenance/src/agents/context-fixer.ts`:
+  - **Fix E — system prompt.** Rewrote the system prompt as a
+    numbered five-rule contract. Rule 3 explicitly forbids
+    `> Note:` / blockquote-appending and instructs the LLM to
+    return the file UNCHANGED when no structural edit is
+    possible. Rule 4 reinforces it ("the edit must be something
+    that, on the next alignment check, would mean this finding no
+    longer fires. If you cannot achieve that, return the file
+    unchanged"). Combined with the no-change short-circuit
+    already in the fixer, this lets the runner detect unresolvable
+    findings via the `reason: 'no-change'` path instead of via
+    the previous garbage-blockquote-appending path
+- `packages/adapters/postgres/src/migrations/008_finding_attempts.sql`
+  (new): `maintenance_finding_attempts` table — `(project_id,
+  finding_hash) UNIQUE`, plus `attempt_count` / `last_attempted`
+  / `escalated`. FK `project_id REFERENCES projects(id) ON DELETE
+  CASCADE` so a deleted project leaves no orphan rows.
+  `idx_finding_attempts_project` for the per-project read path.
+  Pure schema, no `schema_migrations` writes (runner owns those)
+- `packages/core/src/repository/index.ts`:
+  - New `FindingAttemptRecord` + `FindingAttemptRepository`
+    interface (`upsertAttempt`, `getAttempts`, `markEscalated`,
+    `resetAttempts`). Added `findingAttempts` to
+    `RepositoryRegistry`
+  - `AlertType` extended with `'maintenance-stuck'`
+  - `AlertRequiredAction` extended with `'review-manually'`
+- `packages/core/src/index.ts`: re-exports
+  `FindingAttemptRecord` + `FindingAttemptRepository`
+- `packages/adapters/postgres/src/repositories/finding-attempts.ts`
+  (new): `PostgresFindingAttemptRepository`. `upsertAttempt` uses
+  `INSERT ... ON CONFLICT (project_id, finding_hash) DO UPDATE
+  SET attempt_count = ... + 1, last_attempted = NOW()` so
+  concurrent maintenance runs increment atomically without a
+  read-modify-write race. `getAttempts` short-circuits on empty
+  input (`postgres.js` rejects empty IN-lists). `resetAttempts`
+  deletes the row rather than zeroing the counter — a successful
+  fix should be a clean slate, not "attempted N times and
+  succeeded"
+- `packages/adapters/{oracle,mssql}/src/repositories/finding-attempts.ts`
+  (new): throw-stub `*FindingAttemptRepository` classes so
+  interface drift in core surfaces as a build break here. Same
+  pattern as the alerts / deployment-events / maintenance-runs
+  stubs. Wired in each adapter's `index.ts`
+- `packages/adapters/postgres/src/index.ts`: instantiates and
+  registers `PostgresFindingAttemptRepository` in the
+  `createPostgresAdapter` registry
+- `packages/agents/maintenance/src/runner/index.ts`:
+  - New `MAX_ATTEMPTS = 3` constant + `computeFindingHash(intent)`
+    helper (Node built-in `crypto.createHash('sha256')`; hashes
+    `${type}:${affectedFiles[0]}:${evidence.slice(0,80)}` so
+    minor LLM-paraphrasing of `suggestedAction` doesn't change
+    the hash)
+  - Replaced the inline direct-fix block with `runDirectFix(args)`.
+    Flow:
+    1. `getAttempts(projectId, [hash])` — early return if the
+       finding is already escalated (silent skip; no LLM call,
+       no clone)
+    2. Call `applyContextFileFix(intent, project)`
+    3. If `outcome.committed`: `resetAttempts(hash)` (delete the
+       row so the NEXT occurrence starts fresh) and record a
+       `direct-fix-applied` finding
+    4. If not committed: `upsertAttempt(hash)` (increment or
+       insert at 1) and call `maybeEscalate(...)` which fires
+       the alert ONLY when the post-upsert `attemptCount >=
+       MAX_ATTEMPTS`. The third failed attempt is the one that
+       creates the alert — not the fourth run
+    5. Thrown failures count as attempts too and also call
+       `maybeEscalate` so a fixer-throwing finding can't loop
+       forever either
+  - `maybeEscalate(...)` calls `markEscalated(hash)` then
+    `alerts.create({ type: 'maintenance-stuck', severity:
+    'medium', requiredAction: 'review-manually', context:
+    {...full intent context + attemptCount + findingHash} })`
+    and appends a typed `direct-fix-escalated`
+    `MaintenanceFinding` so the run record visibly shows the
+    escalation
+  - Per-intent try/catch from the previous session is preserved:
+    one bad fix doesn't abort the per-project loop
+
+Verified live against `trackeros` (correlationId-equivalent:
+maintenance triggers, not intents). Clean DB state at start
+(`DELETE FROM maintenance_finding_attempts; DELETE FROM alerts
+WHERE type='maintenance-stuck'`):
+
+- **Run 1 (Fix A + Fix B validation).** Pre-fix DOMAIN.md had
+  the agent reporting 6 entity findings (`Components`, `Type`,
+  `Description`, `Props`, plus 2 real). Post-fix the run
+  reported `findings: 4 / directFixes: 2`:
+  - 2 real `domain-entity-without-module` findings only
+    (`WelcomeScreen`, `StartButton`) — every false positive
+    (`Components`, `Type`, `Description`, `Props`) eliminated
+  - Both findings had `affectedFiles[0] = docs/ARCHITECTURE.md`
+    (Fix B: was DOMAIN.md before)
+  - 2 direct fixes committed to ARCHITECTURE.md (not DOMAIN.md);
+    the LLM added `WelcomeScreen/` and `StartButton/` subdirs to
+    the markdown directory tree
+  - DOMAIN.md was NOT touched (Fix E: the prompt no longer
+    invites blockquote-appending)
+- **Run 2 (idempotency budget — attempt 1).** Same 2 findings
+  re-fire (the LLM's tree-diagram edits don't satisfy the
+  module extractor's literal-`src/modules/<name>` regex —
+  documented as a Pending enhancement). Both go through the
+  fixer, get `reason: 'no-change'` (the LLM, given the
+  tightened prompt, returns unchanged), `upsertAttempt` →
+  `attempt_count = 1` for each hash. Zero commits, zero
+  alerts, no escalation yet
+- **Run 3 (attempt 2).** Same 2 findings. `attempt_count = 2`
+  for each. Still no escalation
+- **Run 4 (attempt 3 → escalate).** Same 2 findings.
+  `attempt_count = 3` for each → `MAX_ATTEMPTS` hit →
+  `maybeEscalate` fired for each → 2 rows flipped to
+  `escalated = TRUE` → 2 `maintenance-stuck` alerts created
+  with severity `medium`, `requiredAction: 'review-manually'`,
+  full context payload (intentType, affectedFiles, evidence,
+  suggestedAction, attemptCount, findingHash). Run record:
+  `findings: 4 / directFixes: 0` (2 original + 2
+  `direct-fix-escalated`)
+- **Run 5 (post-escalation silent skip).** Same 2 findings.
+  Each finding's `escalated` flag is checked at the start of
+  `runDirectFix` → early return → no clone, no LLM call, no
+  commit. Run total wall-clock: **838 ms** (down from ~10 s
+  on runs 1–4). `attempt_count` stayed at 3, `escalated` stayed
+  `true`, no new alert created. Run record: `findings: 2 /
+  directFixes: 0` (just the original two; no escalation
+  re-fire). This is the final converged state — the loop is
+  bounded
+- **Alert payload verified** by direct `SELECT` on the alerts
+  table: title `Maintenance agent cannot resolve finding
+  (CONTEXT_ALIGNMENT)`, severity `medium`,
+  `required_action: review-manually`, description containing
+  the attempt count + the original `evidence` field. The
+  `context` JSONB round-tripped cleanly with all keys present
+- **GitHub repo state.** `main` HEAD moved exactly once
+  during the verification (run 1 added two commits to
+  ARCHITECTURE.md). HEAD did NOT advance during runs 2–5 —
+  no spurious `> Note:` blockquote commits, no garbage edits.
+  Before this session: every run produced 4–6 commits even
+  when nothing structural was being fixed; after: zero
+  commits once the LLM correctly identifies it can't resolve
+  the finding
+
+Decisions made:
+- **MAX_ATTEMPTS = 3 with post-attempt escalation.** Brief said
+  "third run: alert created". Implemented by incrementing
+  *first* (the third attempt's row reaches `attempt_count = 3`)
+  then checking `>= MAX_ATTEMPTS`, so the alert fires on the
+  same run that made the third try. Cleaner than gating
+  pre-attempt (where you'd either over-attempt or under-attempt
+  by one) and the row reflects "the work that was actually
+  done"
+- **Reset on success means DELETE, not UPDATE attempt_count = 0.**
+  A successful fix is a clean slate — there's no value in
+  preserving `attempt_count=0, last_attempted=NOW()` as a
+  historical record. If the same finding recurs months later
+  it should genuinely start at attempt 1. DELETE is also
+  cheaper and avoids stale rows on long-lived projects
+- **Hash inputs trim `evidence` to 80 chars.** Long evidence
+  strings can include LLM-rephrased wording around stable
+  facts. The first 80 chars contain the entity / module /
+  principle name and the structural verdict; that's stable
+  across runs. Truncating means the hash is robust against
+  trivial rewording of the agent's output in a future code
+  change
+- **`maintenance-stuck` alerts are `severity: medium`, not
+  `high`.** A stuck context-file finding is fixable manually
+  in seconds and rarely blocks work. The dashboard's existing
+  sidebar badge already aggregates unacknowledged alerts;
+  flooding it with `high` for what is effectively "look here
+  when you have a minute" would dilute the priority signal
+  reserved for `clarification-needed` and
+  `GOLDEN_PRINCIPLE_BREACH`
+- **Tightened prompt + no-change path is the architect-favored
+  resolution** for "LLM can't satisfy the regex". The
+  alternative — allowing deletions on a per-intent flag
+  (Fix D in the diagnostic) — was deliberately out of scope.
+  The no-change path is safer (no chance of an LLM choosing
+  to "fix" by removing something), and the idempotency budget
+  catches the unbounded-loop case regardless
+- **`getAttempts` takes an IN-list.** Today the runner only
+  ever passes a single hash, but the API shape supports
+  batch lookup for free (one round trip per intent vs one per
+  project). Keeps the door open for a future
+  `getAttemptsForRun()` optimisation without an interface
+  change
+- **`'maintenance-stuck'` AlertType + `'review-manually'`
+  AlertRequiredAction added to the typed unions in core, not
+  shoved into `context` JSONB.** These are platform-level
+  concepts that downstream consumers (the dashboard's Alerts
+  view, the future alert-routing layer) should be able to
+  switch on at the type level. Worth the interface-change
+  cost
+- **Repo cleanup of `trackeros` DOMAIN.md is operator
+  responsibility, per brief.** The 12+ spurious `> Note:`
+  blockquote lines accumulated by the previous buggy runs
+  remain in DOMAIN.md until the operator removes them in a
+  manual commit. The session log documents this; Claude Code
+  does not automate it (a destructive auto-cleanup is the
+  wrong default). After the manual cleanup the file will look
+  like its original template again and DOMAIN.md will stop
+  growing
+
+Build status: `pnpm -r build` clean across all 12 packages.
+Migration 008 applied on first start (`schema_migrations` now
+lists 8 versions). Server image rebuilt. Live verification
+covered the full lifecycle: convergence (false positives
+gone), no-op (no garbage commits when LLM can't resolve),
+budget (3-attempt escalation on the same run as the third
+attempt), and post-escalation silent skip (≤1 s).
+
+Operator follow-up: clean up `trackeros` DOMAIN.md manually.
+The recommended commit:
+
+```
+cd <trackeros working tree>
+git pull
+# edit docs/DOMAIN.md, remove every `> Note: …` line added by the
+# previous buggy maintenance runs (~12 lines below the entity
+# definitions)
+git add docs/DOMAIN.md
+git commit -m "docs: remove spurious Note blockquotes from alignment-agent bug [manual cleanup]"
+git push
+```
+
+Follow-up logged in Pending enhancements:
+- The module extractor only matches a literal contiguous
+  `src/modules/<name>` substring. The LLM's idiomatic
+  markdown directory-tree edits don't produce that substring
+  (the parent path is implied by indentation in
+  `├── modules/` / `│   └── WelcomeScreen/`). The
+  idempotency guard catches the loop after 3 attempts and
+  escalates, so the platform is safe — but the underlying
+  reconciliation never resolves. Long-term fix is either to
+  teach the extractor to follow the tree OR to change the
+  suggestedAction text to ask the LLM for a literal
+  `src/modules/<name>/ — description` line outside the tree
+  block
 

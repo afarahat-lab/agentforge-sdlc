@@ -18,6 +18,7 @@ import { PostgresSignalRepository } from './repositories/signals';
 import { PostgresProjectRepository } from './repositories/projects';
 import { PostgresDeploymentEventRepository } from './repositories/deployment-events';
 import { PostgresMaintenanceRunRepository } from './repositories/maintenance-runs';
+import { PostgresFindingAttemptRepository } from './repositories/finding-attempts';
 import { PostgresAlertRepository } from './repositories/alerts';
 import { PostgresAgentExecutionLogRepository } from './repositories/execution-logs';
 import { runMigrations } from './migrations/runner';
@@ -46,6 +47,7 @@ export async function createPostgresAdapter(databaseUrl: string): Promise<Reposi
     projects:   new PostgresProjectRepository(),
     deploymentEvents: new PostgresDeploymentEventRepository(),
     maintenanceRuns:  new PostgresMaintenanceRunRepository(),
+    findingAttempts:  new PostgresFindingAttemptRepository(),
     alerts:           new PostgresAlertRepository(),
     executionLogs:    new PostgresAgentExecutionLogRepository(),
   };

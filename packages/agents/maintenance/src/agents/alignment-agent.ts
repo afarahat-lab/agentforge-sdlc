@@ -44,32 +44,41 @@ export async function runAlignmentAgent(input: MaintenanceAgentInput): Promise<M
     const principles = await readOrEmpty(join(workDir, 'docs/GOLDEN_PRINCIPLES.md'));
     const agentsMd = await readOrEmpty(join(workDir, 'AGENTS.md'));
 
-    const entities = new Set(extractEntities(domain).map((e) => e.toLowerCase()));
-    const modules = new Set(extractModules(architecture).map((m) => m.toLowerCase()));
+    // Preserve original casing for human-readable messages; lowercase
+    // for the cross-check set comparison so "Components" ↔ "components"
+    // matches the directory-name convention.
+    const entityNames = extractEntities(domain);
+    const moduleNames = extractModules(architecture);
+    const entityKeys = new Set(entityNames.map((e) => e.toLowerCase()));
+    const moduleKeys = new Set(moduleNames.map((m) => m.toLowerCase()));
     const principleIds = extractPrincipleIds(principles);
 
     // Domain entity ↔ architecture module cross-check.
-    const entitiesWithoutModules = [...entities].filter((e) => !modules.has(e));
-    const modulesWithoutEntities = [...modules].filter((m) => !entities.has(m));
+    const entitiesWithoutModules = entityNames.filter((e) => !moduleKeys.has(e.toLowerCase()));
+    const modulesWithoutEntities = moduleNames.filter((m) => !entityKeys.has(m.toLowerCase()));
 
     for (const entity of entitiesWithoutModules) {
       findings.push({
         type: 'domain-entity-without-module',
         description: `entity '${entity}' is declared in DOMAIN.md but has no matching src/modules entry in ARCHITECTURE.md`,
-        affectedFiles: ['docs/DOMAIN.md', 'docs/ARCHITECTURE.md'],
+        affectedFiles: ['docs/ARCHITECTURE.md', 'docs/DOMAIN.md'],
         severity: 'medium',
         suggestedAction:
-          `Either add an architecture module for '${entity}' in docs/ARCHITECTURE.md, or remove the entity from docs/DOMAIN.md.`,
+          `Add a src/modules/${entity}/ entry to docs/ARCHITECTURE.md to match the '${entity}' entity defined in docs/DOMAIN.md.`,
       });
       intentsQueued.push({
         type: 'CONTEXT_ALIGNMENT',
         projectId: input.projectId,
         priority: 'normal',
-        affectedFiles: ['docs/DOMAIN.md', 'docs/ARCHITECTURE.md'],
+        // affectedFiles[0] is the file context-fixer writes to. ARCHITECTURE.md
+        // is the right target for entity-without-module: the resolution is to
+        // declare a module that matches the existing entity. DOMAIN.md goes in
+        // slot 1 as context (the fixer does not write to it).
+        affectedFiles: ['docs/ARCHITECTURE.md', 'docs/DOMAIN.md'],
         evidence: `entity '${entity}' in DOMAIN.md has no matching architecture module`,
         suggestedAction: maintenanceIntentText(
           'CONTEXT_ALIGNMENT',
-          `Reconcile docs/DOMAIN.md and docs/ARCHITECTURE.md: entity '${entity}' exists in the domain model but no module references it. Decide whether to introduce the module under src/modules/${entity}/ or to remove the entity from the domain model.`,
+          `Add a src/modules/${entity}/ entry to docs/ARCHITECTURE.md to match the '${entity}' entity defined in docs/DOMAIN.md.`,
         ),
       });
     }
@@ -77,19 +86,21 @@ export async function runAlignmentAgent(input: MaintenanceAgentInput): Promise<M
       findings.push({
         type: 'architecture-module-without-entity',
         description: `module '${moduleName}' is listed in ARCHITECTURE.md but has no matching entity in DOMAIN.md`,
-        affectedFiles: ['docs/ARCHITECTURE.md', 'docs/DOMAIN.md'],
+        affectedFiles: ['docs/DOMAIN.md', 'docs/ARCHITECTURE.md'],
         severity: 'low',
-        suggestedAction: `Add an entity for '${moduleName}' to docs/DOMAIN.md, or remove the module from ARCHITECTURE.md.`,
+        suggestedAction: `Add a '${moduleName}' entity definition to docs/DOMAIN.md to match the src/modules/${moduleName}/ module in docs/ARCHITECTURE.md.`,
       });
       intentsQueued.push({
         type: 'CONTEXT_ALIGNMENT',
         projectId: input.projectId,
         priority: 'low',
-        affectedFiles: ['docs/ARCHITECTURE.md', 'docs/DOMAIN.md'],
+        // DOMAIN.md is the write target — we need a new entity definition;
+        // ARCHITECTURE.md (which already names the module) is context.
+        affectedFiles: ['docs/DOMAIN.md', 'docs/ARCHITECTURE.md'],
         evidence: `module '${moduleName}' in ARCHITECTURE.md has no matching DOMAIN.md entity`,
         suggestedAction: maintenanceIntentText(
           'CONTEXT_ALIGNMENT',
-          `Reconcile docs/ARCHITECTURE.md and docs/DOMAIN.md: module '${moduleName}' is declared but no domain entity references it. Either document the entity or remove the module reference.`,
+          `Add a '${moduleName}' entity definition to docs/DOMAIN.md to match the src/modules/${moduleName}/ module in docs/ARCHITECTURE.md.`,
         ),
       });
     }
@@ -103,17 +114,18 @@ export async function runAlignmentAgent(input: MaintenanceAgentInput): Promise<M
         description: `principle ${pid} is defined in GOLDEN_PRINCIPLES.md but is not referenced in AGENTS.md`,
         affectedFiles: ['AGENTS.md', 'docs/GOLDEN_PRINCIPLES.md'],
         severity: 'low',
-        suggestedAction: `Add a reference to ${pid} in AGENTS.md so agents are aware of the rule.`,
+        suggestedAction: `Add a reference to ${pid} in AGENTS.md under the 'What agents must never do' section.`,
       });
       intentsQueued.push({
         type: 'CONTEXT_ALIGNMENT',
         projectId: input.projectId,
         priority: 'low',
+        // AGENTS.md is already in slot 0 (write target) — correct.
         affectedFiles: ['AGENTS.md', 'docs/GOLDEN_PRINCIPLES.md'],
         evidence: `principle ${pid} in GOLDEN_PRINCIPLES.md is not referenced in AGENTS.md`,
         suggestedAction: maintenanceIntentText(
           'CONTEXT_ALIGNMENT',
-          `Update AGENTS.md to reference golden principle ${pid} so all agents reading the orientation document see the rule.`,
+          `Add a reference to ${pid} in AGENTS.md under the 'What agents must never do' section so agents reading the orientation document see the rule.`,
         ),
       });
     }
@@ -134,26 +146,74 @@ async function readOrEmpty(path: string): Promise<string> {
   }
 }
 
+/**
+ * Field labels commonly used inside an entity definition that the
+ * old regex misread as entities themselves. Stop list prevents the
+ * `- **Type**: Page` / `- **Description**: …` pattern from leaking in.
+ * Keep this list minimal — adding too many words masks real entities.
+ */
+const FIELD_LABEL_STOP_LIST = new Set<string>([
+  'Type', 'Description', 'Status', 'Notes', 'Props', 'Id', 'Name',
+  'Fields', 'Relationships', 'Methods', 'Properties', 'Attributes',
+  'Example', 'Usage', 'Parameters', 'Returns', 'Throws', 'See',
+]);
+
+/**
+ * Convention used by the template DOMAIN.md and most authored ones:
+ *   `## SectionName`   (h2)  — grouping heading (Components, Entities, …)
+ *   `### EntityName`   (h3)  — actual entity declaration
+ *   `- **FieldName**:` (bullet) — attribute on the enclosing entity
+ *
+ * Pre-fix: the extractor matched h2 + bold-bullet patterns indiscriminately
+ * and treated section groupings / field labels as entities, producing
+ * persistent false-positive alignment findings (see SESSION_LOG entry
+ * 2026-06-01 root-cause analysis). The H3-only match + stop list pair
+ * fixes both classes of false positive.
+ */
 function extractEntities(domainMd: string): string[] {
-  const names = new Set<string>();
-  // `## EntityName` headings (skip `## Project purpose` etc — only single
-  // capitalised words / PascalCase considered entities)
-  for (const m of domainMd.matchAll(/^##\s+([A-Z][A-Za-z0-9]+)\s*$/gm)) {
-    if (m[1]) names.add(m[1]);
+  const entities: string[] = [];
+  const seen = new Set<string>();
+
+  for (const m of domainMd.matchAll(/^###\s+([A-Z][A-Za-z0-9]+)\s*$/gm)) {
+    const name = m[1];
+    if (name && !seen.has(name) && !FIELD_LABEL_STOP_LIST.has(name)) {
+      entities.push(name);
+      seen.add(name);
+    }
   }
-  // `- **EntityName**` bullet lists
-  for (const m of domainMd.matchAll(/^[-*]\s+\*\*([A-Z][A-Za-z0-9]+)\*\*/gm)) {
-    if (m[1]) names.add(m[1]);
+
+  // Top-level bullet-list entity definitions (the alternate format):
+  //   - **EntityName** — description
+  // Required em-dash / en-dash / hyphen separator after the bold name
+  // distinguishes an entity definition line from a field-label bullet
+  // (`- **Type**: value`) where a colon follows the closing `**`.
+  for (const m of domainMd.matchAll(/^[-*]\s+\*\*([A-Z][A-Za-z0-9]+)\*\*\s*[—–-]/gm)) {
+    const name = m[1];
+    if (name && !seen.has(name) && !FIELD_LABEL_STOP_LIST.has(name)) {
+      entities.push(name);
+      seen.add(name);
+    }
   }
-  return [...names];
+
+  return entities;
 }
 
 function extractModules(architectureMd: string): string[] {
-  const modules = new Set<string>();
-  for (const m of architectureMd.matchAll(/src\/modules\/([a-z][a-z0-9-]*)/g)) {
-    if (m[1]) modules.add(m[1]);
+  const modules: string[] = [];
+  const seen = new Set<string>();
+
+  // Accepts kebab-case, snake_case, and CamelCase. Trailing slash is
+  // optional — matches both `src/modules/leave/` (with slash) and
+  // `src/modules/leave` (e.g. inside `## src/modules/leave module`).
+  for (const m of architectureMd.matchAll(/src\/modules\/([a-zA-Z0-9_-]+)\/?/g)) {
+    const name = m[1];
+    if (name && !seen.has(name)) {
+      modules.push(name);
+      seen.add(name);
+    }
   }
-  return [...modules];
+
+  return modules;
 }
 
 function extractPrincipleIds(principlesMd: string): string[] {

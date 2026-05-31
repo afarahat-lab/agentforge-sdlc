@@ -195,12 +195,19 @@ async function generateUpdatedContent(args: {
   const llm = getLLMClient();
 
   const system =
-    `You are a technical writer updating project context files (markdown / plain text). ` +
-    `Make the MINIMAL change needed to address the finding described by the maintenance agent. ` +
-    `Preserve ALL existing content — do not delete sections, do not rewrite headings, do not ` +
-    `compress paragraphs. Your output is the COMPLETE updated file content from the first ` +
-    `character to the last. Return only the file content with no commentary, no markdown code ` +
-    `fences, and no explanation.`;
+    `You are a technical writer making precise, minimal updates to project context files.\n\n` +
+    `Rules you MUST follow:\n` +
+    `1. Make only the change needed to address the finding. Do not rewrite, restructure, or ` +
+    `summarise existing content.\n` +
+    `2. Preserve ALL existing text. Do not delete sections, change headings, or compress ` +
+    `paragraphs.\n` +
+    `3. Do NOT add \`> Note:\` or other blockquotes that restate the finding or describe what ` +
+    `needs to be done. If you cannot make a real structural edit that resolves the finding, ` +
+    `return the file UNCHANGED.\n` +
+    `4. Your edit must be something that, on the next alignment / drift check, would mean this ` +
+    `finding no longer fires. If you cannot achieve that, return the file unchanged.\n` +
+    `5. Return only the complete updated file content — no explanation, no preamble, no ` +
+    `markdown code fences.`;
 
   const user =
     `File: ${targetFile}\n\n` +
@@ -208,8 +215,9 @@ async function generateUpdatedContent(args: {
     `<<<FILE\n${currentContent}\nFILE>>>\n\n` +
     `Finding: ${intent.evidence}\n\n` +
     `Suggested action: ${stripMaintenancePrefix(intent.suggestedAction)}\n\n` +
-    `Return the complete updated file content (everything between FILE markers above, with ` +
-    `your minimal additive edit applied). Do not include the FILE markers.`;
+    `Return the complete updated file content (everything between the FILE markers above, ` +
+    `with your minimal real edit applied OR unchanged if no real edit is possible). Do not ` +
+    `include the FILE markers.`;
 
   const result = await llm.complete({
     messages: [
