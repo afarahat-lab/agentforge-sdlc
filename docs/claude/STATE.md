@@ -8,7 +8,7 @@ the historical record of how the state evolved._
 
 ## Current state (keep this section current)
 
-**Last updated:** 2026-05-31 (Claude Code — Maintenance view: Recent Runs populated, Run now error UX)
+**Last updated:** 2026-05-31 (Claude Code — Maintenance Recent Runs accordion + findings detail panel)
 
 **Repo:** https://github.com/afarahat-lab/gestalt
 
@@ -318,6 +318,26 @@ the historical record of how the state evolved._
     `maintenance.run-completed` SSE event. Trigger errors render as a
     red `✗ Failed to trigger: <message>` strip under the agent card
     and auto-clear after 5 s
+  - **Each Recent runs row is a clickable accordion** that expands an
+    inline detail panel — same idiom as the IntentDetail agent-
+    execution accordion. The header row surfaces stats at a glance:
+    `N findings` (amber when > 0, dim when 0), `N intents queued`
+    (amber, omitted when 0), `N fixes applied` (green, omitted when
+    0), duration in dim text (`ms` under 1 s, otherwise `1.2s`), and
+    the timestamp. Expanded panel shows a Run summary section
+    (agent / status / duration / direct fixes / intents queued /
+    started + completed timestamps) plus either a Findings (N)
+    section with per-finding cards (severity badge — red high /
+    amber medium / dim low; type chip; up-to-3 affected files +
+    "and N more"; description; `→ suggestedAction` in muted italic)
+    or a "No findings — Agent ran cleanly — nothing to report"
+    panel. All data already in the existing `MaintenanceRunRecord`
+    — no separate fetch, no new endpoint. Multiple rows can be
+    expanded at once. Verified live against `trackeros`:
+    alignment-agent run with 6 findings (4 medium + 2 low) shows
+    all 6 cards with the right severity colours, type chips, and
+    file lists; drift-agent run with 0 findings shows the clean
+    panel
   - Live verification against `trackeros`: all 4 agents triggered;
     alignment-agent produced 5 findings → 5 maintenance intents
     queued (all carrying `[gestalt-maintenance/CONTEXT_ALIGNMENT]`

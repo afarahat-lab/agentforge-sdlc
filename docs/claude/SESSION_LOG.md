@@ -3096,3 +3096,174 @@ Follow-up logged:
   via `GET /maintenance/runs` without a projectId arg, which
   the dashboard doesn't currently call
 
+---
+
+### Session 2026-05-31 — Claude Code (Maintenance run detail — expandable findings)
+
+Closes the "what did this maintenance agent actually find?" gap.
+The Recent Runs section now shows each run as a clickable accordion
+that expands an inline detail panel — agent meta + findings cards
+(or a "ran cleanly" panel when the findings array is empty). Same
+data the server already returns; same idiom as the IntentDetail
+agent-execution accordion landed earlier today.
+
+Investigation:
+- `GET /maintenance/runs` already returned `findings` /
+  `durationMs` / `completedAt` / `runAt` / `intentsQueued` /
+  `directFixes` on every row in the `{ data: ... }` envelope.
+  Verified live: a real alignment-agent row in the DB had 6
+  findings populated; a real drift-agent row had `findings: []`.
+  The repo's `complete()` method persists everything via
+  `${JSON.stringify(findings)}::jsonb`; the route returns the
+  full `MaintenanceRunRecord[]`. No backend changes needed
+- The dashboard's `MaintenanceRunSummary` type was the missing
+  link — `findings`, `completedAt`, and `projectId` were not
+  declared, and `durationMs` was non-nullable when the core type
+  has `number | null`. Adding those fields was enough to thread
+  the existing data into the view
+
+Changed:
+- `packages/dashboard/src/types.ts`:
+  - New `MaintenanceFinding` interface mirroring the `@gestalt/core`
+    shape (`type` / `description` / `affectedFiles` / `severity` /
+    `suggestedAction`). The repo's shared `parseJsonb` already
+    normalises postgres.js's object-vs-string return — no parse
+    needed on the dashboard side
+  - `MaintenanceRunSummary` extended: `projectId: string | null`,
+    `status` widened to include `'running'`, `findings:
+    MaintenanceFinding[]`, `durationMs: number | null`,
+    `completedAt: string | null`
+- `packages/dashboard/src/views/Maintenance.tsx`: rewrote the
+  Recent runs row. Top-level accordion state is a
+  `Set<string>` of expanded run ids (multiple rows can be open
+  at once). Row header:
+  - Status glyph (`●` completed green / `✗` failed red / `◎`
+    running blue / `–` other dim)
+  - `agentRole` in muted monospace
+  - **New stats row**: `N findings` (amber when > 0, dim when 0
+    so the operator can scan for "interesting" runs at a glance);
+    `N intents queued` (amber, omitted when 0 — existing tag kept);
+    `N fixes applied` (green, omitted when 0); duration in dim
+    text formatted via `formatDuration` (`<1 s` shows `Nms`,
+    otherwise `N.Ns`); timestamp; ▼/▲ chevron
+  - Click toggles the expanded set
+  - Expanded panel renders a Run summary `Section` (the same
+    `Section` + `KV` helpers IntentDetail uses, lifted into this
+    file so the two views stay independent) listing agent /
+    status (glyph + word) / duration / direct fixes / intents
+    queued / started + completed timestamps
+  - Findings list: when `findings.length === 0`, a "No findings"
+    Section with the body "Agent ran cleanly — nothing to report".
+    When > 0, a "Findings (N)" Section with one `FindingCard` per
+    finding
+  - `FindingCard`: severity badge `⚠ {severity}` coloured red /
+    amber / dim by severity; finding type as a small monospace
+    chip on a `var(--bg-subtle)` background; first 3 affected
+    files as a muted `<li>` list with "and N more" when there
+    are more; description as readable text; if
+    `suggestedAction` is present, a `→ <action>` line in muted
+    italic. Defensive `?? []` on `affectedFiles` so a missing
+    array doesn't crash the render
+
+Verified live against `trackeros`:
+- `pnpm -r build` clean across all 12 packages
+- Server image rebuilt; dashboard bundle is the new
+  `index-CmtUBgy-.js` (220 KB, +15 KB for the panel code)
+- **DB state used for verification (no new triggers needed):**
+  - 1 alignment-agent run, 6 findings (4 `medium /
+    domain-entity-without-module` against
+    `docs/DOMAIN.md` + `docs/ARCHITECTURE.md`, 2 `low /
+    golden-principle-not-cross-referenced` against `AGENTS.md` +
+    `docs/GOLDEN_PRINCIPLES.md`), 6 intents queued, duration
+    1307 ms
+  - 4 drift-agent runs, all `findings: []`, durations
+    1143–1720 ms
+- **API smoke** (curl, the alignment row):
+  - `GET /maintenance/runs?projectId=…&limit=20` returns
+    `findings: [6 objects]`, `durationMs: 1307`, `completedAt:
+    "2026-05-31T19:33:02.334Z"`, `intentsQueued: 6` on the
+    alignment row; `findings: []` on every drift row. The
+    server has been returning the full shape; the dashboard
+    just wasn't reading it
+- **Browser drive (headless Chrome via CDP):**
+  - `/app/maintenance` renders. Each Recent runs row shows the
+    new stats: `6 findings` in amber + `6 intents queued` in
+    amber + `1.3s` + `10:33:01 PM` for the alignment row;
+    `0 findings` in dim + `1.7s` + `10:26:42 PM` for each
+    drift row
+  - Clicked the alignment row → row expanded inline; Run
+    summary panel rendered all 7 KV pairs (Agent / Status /
+    Duration / Direct fixes / Intents queued / Started /
+    Completed); Findings (6) Section rendered all 6 cards
+  - DOM probe confirmed: 6 severity badges (`⚠ medium` × 4,
+    `⚠ low` × 2), 2 type chips
+    (`domain-entity-without-module` and
+    `golden-principle-not-cross-referenced`), 3 captured
+    suggested-action lines starting with `→ Either add an
+    architecture module for 'components' / 'type' /
+    'description' in docs/ARCHITECTURE.md…`, 4 distinct
+    affected files in the file-line lists (docs/DOMAIN.md,
+    docs/ARCHITECTURE.md, AGENTS.md,
+    docs/GOLDEN_PRINCIPLES.md)
+  - Clicked a drift row in parallel → the alignment row stayed
+    open; the drift row expanded showing the Run summary +
+    "No findings — Agent ran cleanly — nothing to report"
+    Section. DOM probe found the exact text in the DOM
+  - Full-page screenshot at 1400×2400 viewport captures both
+    expanded panels stacked plus the remaining collapsed
+    rows
+
+Decisions made:
+- **No new endpoint. No new migration.** The brief was explicit
+  — the server already returns everything via the
+  `MaintenanceRunRecord` shape. Confirmed by inspection of
+  `maintenance-runs.ts` `complete()` (persists all 5 result
+  fields with `::jsonb` cast) + the route's
+  `reply.send({ data: records })`. The whole fix is dashboard-side
+- **`findings` count is muted when zero, amber when > 0.** Brief
+  said "amber if N > 0, dim if 0". A successful clean run
+  shouldn't pull operator attention; a run with findings should.
+  The chip is always rendered (even at 0) so the operator can
+  see at a glance that the agent did run and the count
+- **All data already loaded — no lazy fetch.** The runs array
+  comes from `listMaintenanceRuns` with the full record. Clicking
+  a row is pure UI state; no API call. Multiple rows can be
+  expanded at once (matches the IntentDetail accordion idiom).
+  No loading state, no error state in the panel — the data is
+  either there or the row would not exist
+- **`Section` + `KV` helpers re-implemented locally**, not
+  imported from IntentDetail. IntentDetail's are not exported
+  (they're file-local), and lifting them into a shared module
+  for two callers is premature abstraction. If a third view
+  ever wants the same pattern, factor then. For now the two
+  copies are mechanically identical and ~12 lines each
+- **`affectedFiles` truncates at 3 with "and N more".** Brief's
+  value. Most findings list 2 files (the document and the
+  source); the cap matters for drift-agent's `gestalt/*` branch
+  cleanup list which can have many entries
+- **Severity badge uses `⚠ {severity}` for every level**, not
+  different glyphs per severity. The brief sketched the same
+  glyph for all three; varying the glyph wouldn't add
+  information past the colour
+- **`status` widened to include `'running'`.** The core type has
+  it (the `create()` method writes `'running'` before
+  `complete()` flips to `'completed'` or `'failed'`). The
+  dashboard would never see a running row today — the runner is
+  in-process so by the time the response lands the row is
+  already complete — but if maintenance moves to BullMQ later
+  the dashboard would have to refresh and might catch the
+  in-progress state. Typing it correctly today avoids a
+  type-narrowing rework then
+- **`durationMs: number | null`.** The core has it nullable. A
+  `running` row has `null` duration; nothing in the wild does
+  today, but typing it correctly tracks the schema
+
+Build status: `pnpm -r build` clean across all 12 packages.
+Server image rebuilt; dashboard bundle live under `/app/`.
+Full SDLC slice unchanged — this is a dashboard-only
+enhancement that reads existing data. Both empty and populated
+findings render correctly in the live browser; DOM probe
+confirms every expected element shape.
+
+No follow-ups added — feature is self-contained.
+

@@ -14,7 +14,7 @@ content is derived._
 
 ## Current state (keep this section current)
 
-**Last updated:** 2026-05-31 (Claude Code — Maintenance view: Recent Runs populated, Run now error UX)
+**Last updated:** 2026-05-31 (Claude Code — Maintenance Recent Runs accordion + findings detail panel)
 
 **Repo:** https://github.com/afarahat-lab/gestalt
 
@@ -324,6 +324,26 @@ content is derived._
     `maintenance.run-completed` SSE event. Trigger errors render as a
     red `✗ Failed to trigger: <message>` strip under the agent card
     and auto-clear after 5 s
+  - **Each Recent runs row is a clickable accordion** that expands an
+    inline detail panel — same idiom as the IntentDetail agent-
+    execution accordion. The header row surfaces stats at a glance:
+    `N findings` (amber when > 0, dim when 0), `N intents queued`
+    (amber, omitted when 0), `N fixes applied` (green, omitted when
+    0), duration in dim text (`ms` under 1 s, otherwise `1.2s`), and
+    the timestamp. Expanded panel shows a Run summary section
+    (agent / status / duration / direct fixes / intents queued /
+    started + completed timestamps) plus either a Findings (N)
+    section with per-finding cards (severity badge — red high /
+    amber medium / dim low; type chip; up-to-3 affected files +
+    "and N more"; description; `→ suggestedAction` in muted italic)
+    or a "No findings — Agent ran cleanly — nothing to report"
+    panel. All data already in the existing `MaintenanceRunRecord`
+    — no separate fetch, no new endpoint. Multiple rows can be
+    expanded at once. Verified live against `trackeros`:
+    alignment-agent run with 6 findings (4 medium + 2 low) shows
+    all 6 cards with the right severity colours, type chips, and
+    file lists; drift-agent run with 0 findings shows the clean
+    panel
   - Live verification against `trackeros`: all 4 agents triggered;
     alignment-agent produced 5 findings → 5 maintenance intents
     queued (all carrying `[gestalt-maintenance/CONTEXT_ALIGNMENT]`
@@ -617,170 +637,6 @@ content is derived._
 
 ## Recent session log entries (last 3 from SESSION_LOG.md)
 
-### Session 2026-05-31 — Claude Code (richer ActiveAgents + Deployments + JSONB metadata fix)
-
-Both views had everything they needed in the database already; this
-session surfaces it. No new migrations, no new DB tables.
-
-Changed:
-- `packages/server/src/routes/status.ts` — `GET /status/agents`
-  enriched per-row with `intentText`, `cycleProgress` (completed
-  vs total executions in the cycle), and `tokensSoFar` (running
-  total across the cycle's executions). De-dupes per-correlation
-  lookups via two `Map`s so a six-agent cycle triggers two
-  queries, not twelve
-- `packages/server/src/routes/deployments.ts` (new) — new
-  `GET /deployments?projectId=<id>&limit=20`,
-  `requireRole('viewer')`. Returns `DeploymentSummary[]`:
-  intentId / correlationId / intentText / status / events
-  (ASC by createdAt) / prUrl / prNumber / branch / runId /
-  deploymentUrl / startedAt / completedAt. Fetches the three
-  deploy-related status buckets (`deploying`, `deployed`,
-  `failed`) in parallel via `intents.list` (the repo only
-  takes one status at a time), merges, sorts newest-first,
-  caps to `limit`. Per-intent `deploymentEvents.findByCorrelationId`,
-  drops cycles with no events (gate-failed intents that never
-  reached pr-agent). Branch lifted from the `pr-opened`
-  event's `metadata['branch']`; `prUrl` / `prNumber` from
-  `pr-opened`; `runId` from `pipeline-passed` (fallback to
-  triggered / failed); `deploymentUrl` from production
-  promotion (fallback to staging)
-- `packages/server/src/app.ts` — registers the new route
-- `packages/adapters/postgres/src/repositories/deployment-events.ts`
-  — new `parseMetadata` helper. postgres.js returns the JSONB
-  `metadata` column as either an object OR a JSON-encoded
-  string depending on how the row was written and what type
-  adapters are registered. Same trap as the alerts repo
-  (`parseContext`) and maintenance-runs repo
-  (`parseFindings`). Without it, the `branch` extraction in
-  `/deployments` returned null for every cycle because
-  `metadata['branch']` against a string is `undefined`. The
-  helper short-circuits on object / null / undefined, then
-  defensively `JSON.parse`s strings and falls back to `{}` on
-  any failure. Mirrors the pattern in the other two repos
-- `packages/dashboard/src/types.ts`:
-  - `AgentExecutionSummary` gained optional `intentText`,
-    `cycleProgress`, `tokensSoFar`. Optional so the
-    IntentDetail timeline (which doesn't need them) is
-    unchanged
-  - new `DeploymentEvent`, `DeploymentEventType`,
-    `DeploymentSummary` types
-  - kept the old Phase-2-aspirational `DeploymentStatus` /
-    `PendingPromotion` / `PromotionHistoryItem` types since
-    `IntentDetail.deploymentStatus` still references them.
-    Marked with a comment for the next cleanup pass
-- `packages/dashboard/src/api/client.ts` — new
-  `listDeployments({ projectId, limit? })` method
-- `packages/dashboard/src/views/ActiveAgents.tsx` — rewrote
-  the card:
-  - Header row: agent role + elapsed time (top-right,
-    `1s` / `1m 23s` formatter)
-  - Intent text line: 55-char truncation, muted monospace,
-    quoted, omitted if `intentText` is null
-  - Progress row: segmented bar (one `var(--green)` block
-    per completed step, muted bordered block for each
-    remaining step), `step N of M` label, token count
-    `2,847 tokens` formatted with `toLocaleString()`
-  - Progress row omitted entirely when `cycleProgress.total
-    === 0`
-  - Auto-refresh 5 s + SSE refresh kept
-- `packages/dashboard/src/views/Deployments.tsx` — rewrote:
-  - Three sections: In progress / Deployed / Failed (each
-    only rendered when non-empty, except Deployed which
-    always renders with empty-state hint)
-  - Each row: top row with status badge + branch tag (small
-    monospace chip) + timestamp; intent text (65-char
-    truncation); 4-node pipeline timeline; footer links
-  - Timeline node states: filled (green ●), in-progress
-    (blue ◎ with pulse animation), failed (red ✗), empty
-    (muted ○). `classifyNode` maps node index → event type;
-    Pipeline node has the most failure modes (failed
-    overrides passed overrides triggered)
-  - Connectors between nodes turn green when both ends are
-    filled; otherwise muted
-  - HH:MM time under each filled node from the event's
-    `createdAt`
-  - `[↗ View PR #N]` link uses `prUrl` + `prNumber` (the PR
-    number appears only when known). `[↗ View deployment]`
-    link uses `deploymentUrl`. Both
-    `target="_blank" rel="noopener noreferrer"`
-
-Verified live against `trackeros`:
-- `pnpm -r build` clean across all 12 packages
-- Server image rebuilt
-- `GET /deployments?projectId=...&limit=20` returned 9 deployments,
-  every one with a real `branch` value (e.g.
-  `gestalt/9c28d399-add-a-titlecase-utility-under`), a real
-  `prUrl` (NoOp adapter produces `noop://pr/<projectId>/<n>`),
-  a real `runId` (`noop-run-9c28d399-<ts>`), and 5 events per
-  cycle in the right order (`pr-opened`,
-  `pipeline-triggered`, `pipeline-passed`, `promoted-staging`,
-  `promoted-production`). Pre-`parseMetadata`-fix the same
-  call returned `"branch":null` for every row
-- **Browser drive (headless Chrome):**
-  - `/app/deployments`: subtitle reads
-    "9 total · 0 in progress · 9 deployed"; each card shows
-    the deployed badge, the branch chip, the timestamp, the
-    truncated intent, and the four-node pipeline (`PR ●
-    PIPELINE ● STAGING ● PRODUCTION ●`) with the green
-    connectors between every filled node, status labels
-    underneath (opened / passed / promoted / deployed), and
-    `08:20 PM` timestamps. Both `View PR #N` and
-    `View deployment` buttons render. Screenshot captured
-  - `/app/agents` first navigation: idle ("No agents
-    running · platform is idle"). Submitted a fresh intent
-    via the in-page API client, refreshed → "1 running"
-    with the intent-agent card showing `1s` elapsed, the
-    intent text quoted and truncated, and `step 0 of 1`
-    (the cycle was on its first agent at the moment of the
-    query). Two pulsing dots in the DOM (the agent ◎ and
-    the connection pill). Screenshot captured
-
-Decisions made:
-- **De-dupe per-correlation lookups in `/status/agents`** via
-  two Maps. A cycle with six concurrent agents would
-  otherwise fire twelve queries (one `intents.findByCorrelationId`
-  and one `executions.findByCorrelationId` per row). With
-  the cache it's two queries per unique correlationId
-- **Drop cycles with no events** in `/deployments` rather
-  than rendering empty cards. A gate-failed intent that
-  never reached pr-agent has no deployment_events but its
-  status is `failed` — the dashboard's Deployments view
-  should not show it. Gate failures live in QualityGate
-- **`metadata.branch` extracted server-side**, not in the
-  dashboard. The route owns the JSONB parse (via
-  `parseMetadata` in the repo) so the dashboard receives a
-  flat `branch: string | null` and doesn't have to do
-  another JSON parse client-side. Keeps the dashboard
-  decoupled from the JSONB shape
-- **Pipeline node has its own state machine.** The other
-  three nodes are a single event type → filled. Pipeline
-  has three possible events (`pipeline-triggered`,
-  `pipeline-passed`, `pipeline-failed`) with priority:
-  `failed` wins, then `passed`, then `triggered` (which
-  maps to in-progress). Captured in `classifyNode`'s
-  index === 1 branch
-- **Old `DeploymentStatus` types kept** for
-  back-compat with `IntentDetail.deploymentStatus`. That
-  field on `IntentDetail` was never populated by any
-  current API path; removing the types would require
-  touching `IntentDetail.tsx` too. Out of scope. Marked
-  with a "delete when IntentDetail stops referencing it"
-  comment so the next cleanup pass picks it up
-
-Build status: `pnpm -r build` clean. Server image rebuilt;
-both views render with real deployment_events + active
-executions data. The JSONB-metadata-as-string bug is fixed
-on the same pattern as the prior alerts + maintenance-runs
-fixes.
-
-No new follow-ups. The old `DeploymentStatus` /
-`PromotionHistoryItem` types are flagged in a code comment
-rather than the Pending enhancements list — they're
-mechanical cleanup that doesn't need design conversation.
-
----
-
 ### Session 2026-05-31 — Claude Code (consolidated postgres JSONB parser into shared parseJsonb)
 
 Refactor only. Pre-fix: three repo-local helpers (`parseContext`
@@ -1032,4 +888,175 @@ Follow-up logged:
   default per the brief); the global view is reachable only
   via `GET /maintenance/runs` without a projectId arg, which
   the dashboard doesn't currently call
+
+---
+
+### Session 2026-05-31 — Claude Code (Maintenance run detail — expandable findings)
+
+Closes the "what did this maintenance agent actually find?" gap.
+The Recent Runs section now shows each run as a clickable accordion
+that expands an inline detail panel — agent meta + findings cards
+(or a "ran cleanly" panel when the findings array is empty). Same
+data the server already returns; same idiom as the IntentDetail
+agent-execution accordion landed earlier today.
+
+Investigation:
+- `GET /maintenance/runs` already returned `findings` /
+  `durationMs` / `completedAt` / `runAt` / `intentsQueued` /
+  `directFixes` on every row in the `{ data: ... }` envelope.
+  Verified live: a real alignment-agent row in the DB had 6
+  findings populated; a real drift-agent row had `findings: []`.
+  The repo's `complete()` method persists everything via
+  `${JSON.stringify(findings)}::jsonb`; the route returns the
+  full `MaintenanceRunRecord[]`. No backend changes needed
+- The dashboard's `MaintenanceRunSummary` type was the missing
+  link — `findings`, `completedAt`, and `projectId` were not
+  declared, and `durationMs` was non-nullable when the core type
+  has `number | null`. Adding those fields was enough to thread
+  the existing data into the view
+
+Changed:
+- `packages/dashboard/src/types.ts`:
+  - New `MaintenanceFinding` interface mirroring the `@gestalt/core`
+    shape (`type` / `description` / `affectedFiles` / `severity` /
+    `suggestedAction`). The repo's shared `parseJsonb` already
+    normalises postgres.js's object-vs-string return — no parse
+    needed on the dashboard side
+  - `MaintenanceRunSummary` extended: `projectId: string | null`,
+    `status` widened to include `'running'`, `findings:
+    MaintenanceFinding[]`, `durationMs: number | null`,
+    `completedAt: string | null`
+- `packages/dashboard/src/views/Maintenance.tsx`: rewrote the
+  Recent runs row. Top-level accordion state is a
+  `Set<string>` of expanded run ids (multiple rows can be open
+  at once). Row header:
+  - Status glyph (`●` completed green / `✗` failed red / `◎`
+    running blue / `–` other dim)
+  - `agentRole` in muted monospace
+  - **New stats row**: `N findings` (amber when > 0, dim when 0
+    so the operator can scan for "interesting" runs at a glance);
+    `N intents queued` (amber, omitted when 0 — existing tag kept);
+    `N fixes applied` (green, omitted when 0); duration in dim
+    text formatted via `formatDuration` (`<1 s` shows `Nms`,
+    otherwise `N.Ns`); timestamp; ▼/▲ chevron
+  - Click toggles the expanded set
+  - Expanded panel renders a Run summary `Section` (the same
+    `Section` + `KV` helpers IntentDetail uses, lifted into this
+    file so the two views stay independent) listing agent /
+    status (glyph + word) / duration / direct fixes / intents
+    queued / started + completed timestamps
+  - Findings list: when `findings.length === 0`, a "No findings"
+    Section with the body "Agent ran cleanly — nothing to report".
+    When > 0, a "Findings (N)" Section with one `FindingCard` per
+    finding
+  - `FindingCard`: severity badge `⚠ {severity}` coloured red /
+    amber / dim by severity; finding type as a small monospace
+    chip on a `var(--bg-subtle)` background; first 3 affected
+    files as a muted `<li>` list with "and N more" when there
+    are more; description as readable text; if
+    `suggestedAction` is present, a `→ <action>` line in muted
+    italic. Defensive `?? []` on `affectedFiles` so a missing
+    array doesn't crash the render
+
+Verified live against `trackeros`:
+- `pnpm -r build` clean across all 12 packages
+- Server image rebuilt; dashboard bundle is the new
+  `index-CmtUBgy-.js` (220 KB, +15 KB for the panel code)
+- **DB state used for verification (no new triggers needed):**
+  - 1 alignment-agent run, 6 findings (4 `medium /
+    domain-entity-without-module` against
+    `docs/DOMAIN.md` + `docs/ARCHITECTURE.md`, 2 `low /
+    golden-principle-not-cross-referenced` against `AGENTS.md` +
+    `docs/GOLDEN_PRINCIPLES.md`), 6 intents queued, duration
+    1307 ms
+  - 4 drift-agent runs, all `findings: []`, durations
+    1143–1720 ms
+- **API smoke** (curl, the alignment row):
+  - `GET /maintenance/runs?projectId=…&limit=20` returns
+    `findings: [6 objects]`, `durationMs: 1307`, `completedAt:
+    "2026-05-31T19:33:02.334Z"`, `intentsQueued: 6` on the
+    alignment row; `findings: []` on every drift row. The
+    server has been returning the full shape; the dashboard
+    just wasn't reading it
+- **Browser drive (headless Chrome via CDP):**
+  - `/app/maintenance` renders. Each Recent runs row shows the
+    new stats: `6 findings` in amber + `6 intents queued` in
+    amber + `1.3s` + `10:33:01 PM` for the alignment row;
+    `0 findings` in dim + `1.7s` + `10:26:42 PM` for each
+    drift row
+  - Clicked the alignment row → row expanded inline; Run
+    summary panel rendered all 7 KV pairs (Agent / Status /
+    Duration / Direct fixes / Intents queued / Started /
+    Completed); Findings (6) Section rendered all 6 cards
+  - DOM probe confirmed: 6 severity badges (`⚠ medium` × 4,
+    `⚠ low` × 2), 2 type chips
+    (`domain-entity-without-module` and
+    `golden-principle-not-cross-referenced`), 3 captured
+    suggested-action lines starting with `→ Either add an
+    architecture module for 'components' / 'type' /
+    'description' in docs/ARCHITECTURE.md…`, 4 distinct
+    affected files in the file-line lists (docs/DOMAIN.md,
+    docs/ARCHITECTURE.md, AGENTS.md,
+    docs/GOLDEN_PRINCIPLES.md)
+  - Clicked a drift row in parallel → the alignment row stayed
+    open; the drift row expanded showing the Run summary +
+    "No findings — Agent ran cleanly — nothing to report"
+    Section. DOM probe found the exact text in the DOM
+  - Full-page screenshot at 1400×2400 viewport captures both
+    expanded panels stacked plus the remaining collapsed
+    rows
+
+Decisions made:
+- **No new endpoint. No new migration.** The brief was explicit
+  — the server already returns everything via the
+  `MaintenanceRunRecord` shape. Confirmed by inspection of
+  `maintenance-runs.ts` `complete()` (persists all 5 result
+  fields with `::jsonb` cast) + the route's
+  `reply.send({ data: records })`. The whole fix is dashboard-side
+- **`findings` count is muted when zero, amber when > 0.** Brief
+  said "amber if N > 0, dim if 0". A successful clean run
+  shouldn't pull operator attention; a run with findings should.
+  The chip is always rendered (even at 0) so the operator can
+  see at a glance that the agent did run and the count
+- **All data already loaded — no lazy fetch.** The runs array
+  comes from `listMaintenanceRuns` with the full record. Clicking
+  a row is pure UI state; no API call. Multiple rows can be
+  expanded at once (matches the IntentDetail accordion idiom).
+  No loading state, no error state in the panel — the data is
+  either there or the row would not exist
+- **`Section` + `KV` helpers re-implemented locally**, not
+  imported from IntentDetail. IntentDetail's are not exported
+  (they're file-local), and lifting them into a shared module
+  for two callers is premature abstraction. If a third view
+  ever wants the same pattern, factor then. For now the two
+  copies are mechanically identical and ~12 lines each
+- **`affectedFiles` truncates at 3 with "and N more".** Brief's
+  value. Most findings list 2 files (the document and the
+  source); the cap matters for drift-agent's `gestalt/*` branch
+  cleanup list which can have many entries
+- **Severity badge uses `⚠ {severity}` for every level**, not
+  different glyphs per severity. The brief sketched the same
+  glyph for all three; varying the glyph wouldn't add
+  information past the colour
+- **`status` widened to include `'running'`.** The core type has
+  it (the `create()` method writes `'running'` before
+  `complete()` flips to `'completed'` or `'failed'`). The
+  dashboard would never see a running row today — the runner is
+  in-process so by the time the response lands the row is
+  already complete — but if maintenance moves to BullMQ later
+  the dashboard would have to refresh and might catch the
+  in-progress state. Typing it correctly today avoids a
+  type-narrowing rework then
+- **`durationMs: number | null`.** The core has it nullable. A
+  `running` row has `null` duration; nothing in the wild does
+  today, but typing it correctly tracks the schema
+
+Build status: `pnpm -r build` clean across all 12 packages.
+Server image rebuilt; dashboard bundle live under `/app/`.
+Full SDLC slice unchanged — this is a dashboard-only
+enhancement that reads existing data. Both empty and populated
+findings render correctly in the live browser; DOM probe
+confirms every expected element shape.
+
+No follow-ups added — feature is self-contained.
 

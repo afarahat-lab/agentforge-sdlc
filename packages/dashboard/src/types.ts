@@ -231,14 +231,32 @@ export interface InterventionRecord {
 
 // ─── Maintenance ──────────────────────────────────────────────────────────────
 
+/**
+ * Single observation produced by a maintenance agent during a run.
+ * Mirrors `MaintenanceFinding` in @gestalt/core. Persisted on the
+ * maintenance_runs row as a JSONB array; the read path (server →
+ * dashboard) does no parsing — `parseJsonb` in the postgres adapter
+ * already normalises object-vs-string return shapes.
+ */
+export interface MaintenanceFinding {
+  type: string;
+  description: string;
+  affectedFiles: string[];
+  severity: 'low' | 'medium' | 'high';
+  suggestedAction: string;
+}
+
 export interface MaintenanceRunSummary {
   id: string;
   agentRole: string;
-  status: 'completed' | 'failed' | 'nothing-to-do';
+  projectId: string | null;
+  status: 'running' | 'completed' | 'failed' | 'nothing-to-do';
   intentsQueued: number;
   directFixes: number;
-  durationMs: number;
+  findings: MaintenanceFinding[];
+  durationMs: number | null;
   runAt: string;
+  completedAt: string | null;
 }
 
 // ─── Live events (SSE) ────────────────────────────────────────────────────────
